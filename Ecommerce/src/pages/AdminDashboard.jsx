@@ -12,10 +12,107 @@ export default function AdminDashboard() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Calculate pending orders using useMemo to avoid recalculating on every render
+  // Enrich orders with product information and calculate totals
+  const enrichedOrders = useMemo(() => {
+    return orders.map(order => {
+      // Find the product for this order
+      const product = products.find(p => p.id === order.product_id);
+      const productPrice = product ? parseFloat(product.price) : 0;
+      const quantity = parseInt(order.qty) || 1;
+      const total = productPrice * quantity;
+      
+      return {
+        ...order,
+        productName: product ? product.name : `Product #${order.product_id}`,
+        productPrice: productPrice,
+        total: total
+      };
+    });
+  }, [orders, products]);
+
+  // Group orders by customer and location (orders placed together)
+  const groupedOrders = useMemo(() => {
+    // Create a map to group orders by customer phone + location + approximate time
+    const orderGroups = {};
+    
+    enrichedOrders.forEach(order => {
+      // Create a unique key for orders that should be grouped together
+      // Group by: customer phone, location, and orders within 1 minute of each other
+      const orderTime = new Date(order.created_at || order.date || Date.now());
+      const timeKey = Math.floor(orderTime.getTime() / (60 * 1000)); // Group by minute
+      const groupKey = `${order.cust_phone}_${order.location}_${timeKey}`;
+      
+      if (!orderGroups[groupKey]) {
+        orderGroups[groupKey] = {
+          id: order.id, // Use first order's ID as group ID
+          cust_name: order.cust_name,
+          cust_phone: order.cust_phone,
+          cust_email: order.cust_email,
+          location: order.location,
+          status: order.status,
+          created_at: order.created_at || order.date,
+          items: [],
+          orderIds: [] // Track all order IDs in this group
+        };
+      }
+      
+      // Add this order's item to the group
+      orderGroups[groupKey].items.push({
+        id: order.id,
+        productName: order.productName,
+        qty: order.qty,
+        price: order.productPrice,
+        subtotal: order.total
+      });
+      
+      orderGroups[groupKey].orderIds.push(order.id);
+      
+      // Update status to the "latest" status in the group
+      // Priority: Delivered > Paid > Pending
+      const statusPriority = { 'Delivered': 3, 'Paid': 2, 'Pending': 1 };
+      const currentPriority = statusPriority[orderGroups[groupKey].status] || 0;
+      const newPriority = statusPriority[order.status] || 0;
+      if (newPriority > currentPriority) {
+        orderGroups[groupKey].status = order.status;
+      }
+    });
+    
+    // Convert to array and calculate totals
+    return Object.values(orderGroups).map(group => ({
+      ...group,
+      totalAmount: group.items.reduce((sum, item) => sum + item.subtotal, 0),
+      totalItems: group.items.reduce((sum, item) => sum + item.qty, 0)
+    })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }, [enrichedOrders]);
+
+  // Calculate pending orders using grouped orders
   const pendingOrders = useMemo(() => {
-    return orders.filter(o => o.status !== "Delivered" && o.status !== "Paid").length;
-  }, [orders]);
+    return groupedOrders.filter(o => o.status !== "Delivered" && o.status !== "Paid").length;
+  }, [groupedOrders]);
+
+  // Calculate sales by status
+  const salesByStatus = useMemo(() => {
+    const stats = {
+      total: 0,
+      pending: 0,
+      paid: 0,
+      delivered: 0
+    };
+
+    groupedOrders.forEach(order => {
+      stats.total += order.totalAmount;
+      
+      if (order.status === 'Pending') {
+        stats.pending += order.totalAmount;
+      } else if (order.status === 'Paid') {
+        stats.paid += order.totalAmount;
+      } else if (order.status === 'Delivered') {
+        stats.delivered += order.totalAmount;
+      }
+    });
+
+    return stats;
+  }, [groupedOrders]);
 
   // Show success/error messages temporarily
   const showMessage = (message, isError = false) => {
@@ -133,7 +230,7 @@ export default function AdminDashboard() {
       headers: { "Content-Type": "multipart/form-data" },
     })
       .then(res => {
-        setProducts(products.map((p) => p.id === editId ? { ...p, ...editItem } : p));
+        setProducts(products.map((p) => p.id === editId ? { ...p, name: editItem.name, price: editItem.price, stock: editItem.stock } : p));
         setEditId(null);
         setEditItem({ name: "", price: "", stock: "", imageFile: null });
         showMessage("Product updated successfully!");
@@ -144,28 +241,36 @@ export default function AdminDashboard() {
       });
   };
 
-  // Update Order Status
-  const updateOrderStatus = (orderId, customerName) => {
-    if (!window.confirm(`Update status for ${customerName}'s order?`)) return;
+  // Update Order Status - now handles grouped orders
+  const updateOrderStatus = async (orderGroup, customerName) => {
+    const itemCount = orderGroup.items.length;
+    const confirmMsg = `Update status for ${customerName}'s order (${itemCount} item${itemCount > 1 ? 's' : ''})?`;
+    
+    if (!window.confirm(confirmMsg)) return;
 
-    axios.put(`http://localhost:5000/orders/${orderId}/status`)
-      .then(res => {
-        setOrders(orders.map(o => {
-          if (o.id === orderId) {
-            return { ...o, status: res.data.status };
-          }
-          return o;
-        }));
-        showMessage("Order status updated!");
-      })
-      .catch(err => {
-        console.error(err);
-        showMessage("Failed to update order status", true);
-      });
+    try {
+      // Update all orders in the group
+      const updatePromises = orderGroup.orderIds.map(orderId =>
+        axios.patch(`http://localhost:5000/orders/${orderId}/status`)
+      );
+      
+      const responses = await Promise.all(updatePromises);
+      const newStatus = responses[0].data.status; // All will have same status
+      
+      // Update local state
+      setOrders(orders.map(o => {
+        if (orderGroup.orderIds.includes(o.id)) {
+          return { ...o, status: newStatus };
+        }
+        return o;
+      }));
+      
+      showMessage(`Order status updated to ${newStatus}!`);
+    } catch (err) {
+      console.error(err);
+      showMessage("Failed to update order status", true);
+    }
   };
-
-  // Total Sales
-  const totalSales = orders.reduce((sum, o) => sum + (o.total || 0), 0);
 
   return (
     <>
@@ -179,7 +284,7 @@ export default function AdminDashboard() {
             </div>
             <div className="stat-card">
               <span className="stat-label">Total Orders</span>
-              <span className="stat-value">{orders.length}</span>
+              <span className="stat-value">{groupedOrders.length}</span>
             </div>
             <div className="stat-card">
               <span className="stat-label">Pending Orders</span>
@@ -291,10 +396,29 @@ export default function AdminDashboard() {
                       <div className="edit-form">
                         <h3>Edit Product</h3>
                         <div className="edit-grid">
-                          <input type="text" value={editItem.name} onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} />
-                          <input type="number" value={editItem.price} onChange={(e) => setEditItem({ ...editItem, price: Number(e.target.value) })} />
-                          <input type="number" value={editItem.stock} onChange={(e) => setEditItem({ ...editItem, stock: Number(e.target.value) })} />
-                          <input type="file" accept="image/*" onChange={(e) => setEditItem({ ...editItem, imageFile: e.target.files[0] })} />
+                          <input 
+                            type="text" 
+                            placeholder="Product name"
+                            value={editItem.name} 
+                            onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} 
+                          />
+                          <input 
+                            type="number" 
+                            placeholder="Price"
+                            value={editItem.price} 
+                            onChange={(e) => setEditItem({ ...editItem, price: e.target.value })} 
+                          />
+                          <input 
+                            type="number" 
+                            placeholder="Stock"
+                            value={editItem.stock} 
+                            onChange={(e) => setEditItem({ ...editItem, stock: e.target.value })} 
+                          />
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            onChange={(e) => setEditItem({ ...editItem, imageFile: e.target.files[0] })} 
+                          />
                         </div>
                         <div className="actions">
                           <button onClick={saveEdit} className="save-btn">Save Changes</button>
@@ -307,7 +431,7 @@ export default function AdminDashboard() {
                           <div className="product-info">
                             <h3 className="product-name">{p.name}</h3>
                             <div className="product-meta">
-                              <span className="price">${p.price}</span>
+                              <span className="price">${parseFloat(p.price || 0).toFixed(2)}</span>
                               <span className={`stock ${p.stock < 10 ? "low" : p.stock < 50 ? "medium" : "high"}`}>
                                 Stock: {p.stock}
                               </span>
@@ -338,51 +462,73 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Orders Section */}
+        {/* Orders Section - Updated to show grouped orders */}
         {activeTab === "orders" && (
           <div className="section">
             <h2 className="section-title">Recent Orders</h2>
             {loading.orders ? (
               <div className="loading">Loading orders...</div>
-            ) : orders.length === 0 ? (
+            ) : groupedOrders.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-icon">📋</span>
                 <p>No orders yet. Orders will appear here.</p>
               </div>
             ) : (
               <div className="list">
-                {orders.map((o) => (
-                  <div key={o.id} className="card order-card">
+                {groupedOrders.map((orderGroup) => (
+                  <div key={orderGroup.id} className="card order-card">
                     <div className="order-header">
                       <div className="order-customer">
-                        <h3>{o.cust_name}</h3>
+                        <h3>{orderGroup.cust_name || 'Unknown Customer'}</h3>
                         <div className="customer-details">
-                          <span className="phone">📱 {o.cust_phone}</span>
-                          <span className="email">✉️ {o.cust_email}</span>
-                          <span className="location">📍 {o.location}</span>
+                          <span className="phone">📱 {orderGroup.cust_phone || 'N/A'}</span>
+                          {orderGroup.cust_email && (
+                            <span className="email">✉️ {orderGroup.cust_email}</span>
+                          )}
+                          <span className="location">📍 {orderGroup.location || 'N/A'}</span>
                         </div>
                       </div>
                       <div className="order-status">
-                        <span className={`status-badge ${o.status?.toLowerCase() || 'pending'}`}>
-                          {o.status || "Pending"}
+                        <span className={`status-badge ${(orderGroup.status || 'pending').toLowerCase()}`}>
+                          {orderGroup.status || "Pending"}
                         </span>
                       </div>
                     </div>
                     
                     <div className="order-items">
-                      <div className="order-item">
-                        <span>{o.productName}</span>
-                        <span>{o.qty} × ${(o.total / o.qty).toFixed(2)}</span>
+                      <div className="items-header">
+                        <span className="items-count">
+                          {orderGroup.items.length} item{orderGroup.items.length > 1 ? 's' : ''}
+                        </span>
                       </div>
+                      {orderGroup.items.map((item) => (
+                        <div key={item.id} className="order-item">
+                          <div className="item-details">
+                            <span className="item-name">{item.productName}</span>
+                            <span className="item-qty">Qty: {item.qty}</span>
+                          </div>
+                          <div className="item-pricing">
+                            <span className="item-unit-price">
+                              ${item.price.toFixed(2)} each
+                            </span>
+                            <span className="item-subtotal">
+                              ${item.subtotal.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                     
                     <div className="order-footer">
                       <div className="order-total">
-                        <strong>Total: ${o.total}</strong>
+                        <span className="total-label">Total Amount:</span>
+                        <strong className="total-amount">
+                          ${orderGroup.totalAmount.toFixed(2)}
+                        </strong>
                       </div>
                       <button 
                         className="status-btn"
-                        onClick={() => updateOrderStatus(o.id, o.cust_name)}
+                        onClick={() => updateOrderStatus(orderGroup, orderGroup.cust_name)}
                       >
                         Update Status
                       </button>
@@ -395,9 +541,25 @@ export default function AdminDashboard() {
         )}
 
         <div className="summary-card">
-          <h2 className="summary-title">💰 Total Sales</h2>
-          <p className="summary-amount">${totalSales.toFixed(2)}</p>
-          <p className="summary-note">Total revenue from all orders</p>
+          <h2 className="summary-title">💰 Total Revenue</h2>
+          <p className="summary-amount">${salesByStatus.total.toFixed(2)}</p>
+          <div className="revenue-breakdown">
+            <div className="breakdown-item pending">
+              <span className="breakdown-label">⏳ Pending</span>
+              <span className="breakdown-value">${salesByStatus.pending.toFixed(2)}</span>
+            </div>
+            <div className="breakdown-item paid">
+              <span className="breakdown-label">💳 Paid</span>
+              <span className="breakdown-value">${salesByStatus.paid.toFixed(2)}</span>
+            </div>
+            <div className="breakdown-item delivered">
+              <span className="breakdown-label">✅ Delivered</span>
+              <span className="breakdown-value">${salesByStatus.delivered.toFixed(2)}</span>
+            </div>
+          </div>
+          <p className="summary-note">
+            From {groupedOrders.length} order{groupedOrders.length !== 1 ? 's' : ''}
+          </p>
         </div>
       </div>
 
@@ -423,6 +585,7 @@ export default function AdminDashboard() {
           background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
+          background-clip: text;
           margin-bottom: 1.5rem;
         }
 
@@ -788,7 +951,12 @@ export default function AdminDashboard() {
           background: #f8fafc;
           border-radius: 8px;
           padding: 1.5rem;
-          margin: -0.5rem;
+        }
+
+        .edit-form h3 {
+          margin-top: 0;
+          margin-bottom: 1rem;
+          color: #1e293b;
         }
 
         .edit-grid {
@@ -796,6 +964,12 @@ export default function AdminDashboard() {
           grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
           gap: 1rem;
           margin-bottom: 1rem;
+        }
+
+        .edit-grid input {
+          padding: 0.5rem;
+          border: 2px solid #e2e8f0;
+          border-radius: 6px;
         }
 
         .order-card {
@@ -841,15 +1015,72 @@ export default function AdminDashboard() {
 
         .order-items {
           margin-bottom: 1rem;
+          background: #f8fafc;
+          padding: 1rem;
+          border-radius: 8px;
+        }
+
+        .items-header {
+          margin-bottom: 0.75rem;
+          padding-bottom: 0.5rem;
+          border-bottom: 1px solid #e2e8f0;
+        }
+
+        .items-count {
+          font-size: 0.875rem;
+          font-weight: 600;
+          color: #64748b;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
         }
 
         .order-item {
           display: flex;
           justify-content: space-between;
+          align-items: center;
           padding: 0.75rem;
-          background: #f8fafc;
-          border-radius: 8px;
-          font-weight: 500;
+          background: white;
+          border-radius: 6px;
+          margin-bottom: 0.5rem;
+          border: 1px solid #e2e8f0;
+        }
+
+        .order-item:last-child {
+          margin-bottom: 0;
+        }
+
+        .item-details {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .item-name {
+          font-weight: 600;
+          color: #1e293b;
+        }
+
+        .item-qty {
+          font-size: 0.875rem;
+          color: #64748b;
+        }
+
+        .item-pricing {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 0.25rem;
+        }
+
+        .item-unit-price {
+          font-size: 0.875rem;
+          color: #64748b;
+        }
+
+        .item-subtotal {
+          font-weight: 600;
+          color: #059669;
+          font-size: 1rem;
         }
 
         .order-footer {
@@ -861,8 +1092,20 @@ export default function AdminDashboard() {
         }
 
         .order-total {
-          font-size: 1.25rem;
-          font-weight: 700;
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .total-label {
+          font-size: 0.875rem;
+          color: #64748b;
+          font-weight: 600;
+        }
+
+        .total-amount {
+          font-size: 1.5rem;
+          font-weight: 800;
           color: #1e293b;
         }
 
@@ -895,7 +1138,44 @@ export default function AdminDashboard() {
         .summary-amount {
           font-size: 3rem;
           font-weight: 800;
-          margin-bottom: 0.5rem;
+          margin-bottom: 1.5rem;
+        }
+
+        .revenue-breakdown {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 1rem;
+          margin-bottom: 1.5rem;
+          padding: 1.5rem;
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 12px;
+          backdrop-filter: blur(10px);
+        }
+
+        .breakdown-item {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+          padding: 1rem;
+          background: rgba(255, 255, 255, 0.15);
+          border-radius: 8px;
+          transition: all 0.2s ease;
+        }
+
+        .breakdown-item:hover {
+          background: rgba(255, 255, 255, 0.25);
+          transform: translateY(-2px);
+        }
+
+        .breakdown-label {
+          font-size: 0.875rem;
+          opacity: 0.9;
+          font-weight: 600;
+        }
+
+        .breakdown-value {
+          font-size: 1.5rem;
+          font-weight: 800;
         }
 
         .summary-note {
@@ -905,6 +1185,30 @@ export default function AdminDashboard() {
 
         .btn-icon {
           font-size: 0.875rem;
+        }
+
+        @media (max-width: 768px) {
+          .order-footer {
+            flex-direction: column;
+            gap: 1rem;
+            align-items: stretch;
+          }
+
+          .order-total {
+            align-items: center;
+          }
+
+          .status-btn {
+            width: 100%;
+          }
+
+          .item-pricing {
+            align-items: flex-start;
+          }
+
+          .revenue-breakdown {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </>

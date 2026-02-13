@@ -109,8 +109,8 @@ export default function OrderForm() {
       return;
     }
 
-    setCartItems(prevCart =>
-      prevCart.map(item => {
+    setCartItems(prevCart => {
+      const updatedCart = prevCart.map(item => {
         if (item.id === productId) {
           // Check stock availability
           if (newQuantity > item.stock) {
@@ -120,11 +120,12 @@ export default function OrderForm() {
           return { ...item, quantity: newQuantity };
         }
         return item;
-      })
-    );
-    
-    // Update localStorage
-    localStorage.setItem("shoppingCart", JSON.stringify(cartItems));
+      });
+      
+      // Update localStorage with new cart
+      localStorage.setItem("shoppingCart", JSON.stringify(updatedCart));
+      return updatedCart;
+    });
   };
 
   const removeItem = (productId) => {
@@ -184,7 +185,6 @@ export default function OrderForm() {
     e.preventDefault();
     
     if (!validateForm()) {
-      // Scroll to first error
       const firstErrorField = Object.keys(errors)[0];
       document.querySelector(`[name="${firstErrorField}"]`)?.focus();
       return;
@@ -194,61 +194,29 @@ export default function OrderForm() {
       setLoading(true);
       
       if (isCheckoutPage) {
-        // Multi-item order processing
-        // First, check stock availability for all items
-        const stockCheckPromises = cartItems.map(item =>
-          axios.get(`http://localhost:5000/products/${item.id}`)
-        );
-        
-        const stockResponses = await Promise.all(stockCheckPromises);
-        const stockIssues = [];
-        
-        stockResponses.forEach((response, index) => {
-          const product = response.data;
-          const cartItem = cartItems[index];
-          
-          if (cartItem.quantity > product.stock) {
-            stockIssues.push({
-              product: cartItem.name,
-              requested: cartItem.quantity,
-              available: product.stock
-            });
-          }
+        // ✅ OPTIMIZED: Multi-item order processing with batch endpoint
+        const orderData = {
+          items: cartItems.map(item => ({
+            productId: item.id,
+            qty: item.quantity
+          })),
+          cust_name: formData.customer,
+          cust_phone: formData.telephone,
+          cust_email: formData.email,
+          location: formData.locationText,
+          status: "Pending",
+        };
+
+        await axios.post("http://localhost:5000/orders/batch", orderData, {
+          headers: { "Content-Type": "application/json" },
         });
-        
-        if (stockIssues.length > 0) {
-          let message = "Stock issues found:\n";
-          stockIssues.forEach(issue => {
-            message += `• ${issue.product}: Requested ${issue.requested}, Available ${issue.available}\n`;
-          });
-          alert(message);
-          setLoading(false);
-          return;
-        }
-        
-        // Create individual orders for each item
-        const orderPromises = cartItems.map(item =>
-          axios.post(`http://localhost:5000/orders/${item.id}`, {
-            product_id: item.id,
-            cust_name: formData.customer,
-            cust_phone: formData.telephone,
-            cust_email: formData.email,
-            qty: item.quantity,
-            location: formData.locationText,
-            date: new Date(),
-            status: "Pending",
-          }, {
-            headers: { "Content-Type": "application/json" },
-          })
-        );
-        
-        await Promise.all(orderPromises);
         
         // Clear cart after successful order
         localStorage.removeItem("shoppingCart");
         
-        alert("✅ Order placed successfully!");
+        alert(`✅ Order placed successfully! ${cartItems.length} item(s) ordered.`);
         navigate("/");
+        
       } else {
         // Single item order processing
         const newOrder = {
@@ -273,8 +241,29 @@ export default function OrderForm() {
     } catch (err) {
       console.error("Order error:", err);
       
-      if (err.response?.data?.message) {
+      // ✅ IMPROVED: Handle structured error responses from backend
+      if (err.response?.status === 400 && err.response?.data?.issues) {
+        // Stock issues with detailed info from batch endpoint
+        const issues = err.response.data.issues;
+        let message = "⚠️ Cannot complete order:\n\n";
+        
+        issues.forEach(issue => {
+          if (issue.issue === "Product not found") {
+            message += `• Product ID ${issue.productId}: Not found in system\n`;
+          } else if (issue.issue === "Insufficient stock") {
+            message += `• ${issue.productName}:\n  Requested: ${issue.requested}\n  Available: ${issue.available}\n\n`;
+          } else {
+            message += `• ${issue.productName || 'Product'}: ${issue.issue}\n`;
+          }
+        });
+        
+        alert(message);
+      } else if (err.response?.data?.message) {
         alert(`❌ ${err.response.data.message}`);
+      } else if (err.response?.status === 500) {
+        alert("❌ Server error. Please try again or contact support.");
+      } else if (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK') {
+        alert("❌ Network error. Please check your connection.");
       } else {
         alert("❌ Failed to place order. Please try again.");
       }
@@ -317,6 +306,12 @@ export default function OrderForm() {
             font-size: 1rem;
             font-weight: 600;
             cursor: pointer;
+            transition: all 0.2s ease;
+          }
+          .empty-cart-message button:hover {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
           }
         `}</style>
       </div>
@@ -583,7 +578,7 @@ export default function OrderForm() {
                   Processing...
                 </>
               ) : (
-                `Place Order - $${isCheckoutPage ? totalPrice.toFixed(2) : totalPrice.toFixed(2)}`
+                `Place Order - $${totalPrice.toFixed(2)}`
               )}
             </button>
           </div>

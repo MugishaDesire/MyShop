@@ -18,6 +18,7 @@ exports.getOrders = async (req, res) => {
 /**
  * POST /orders/:productId
  * Create a new order (single product)
+ * This endpoint is used for both single-item orders and multi-item checkout
  */
 exports.createOrder = async (req, res) => {
   const connection = await db.getConnection();
@@ -43,7 +44,7 @@ exports.createOrder = async (req, res) => {
 
     // Check product stock
     const [products] = await connection.query(
-      "SELECT stock FROM products WHERE id = ?",
+      "SELECT stock, name FROM products WHERE id = ?",
       [productId]
     );
 
@@ -54,7 +55,9 @@ exports.createOrder = async (req, res) => {
 
     if (products[0].stock < qty) {
       await connection.rollback();
-      return res.status(400).json({ message: "Insufficient stock" });
+      return res.status(400).json({ 
+        message: `Insufficient stock for ${products[0].name}. Only ${products[0].stock} available.` 
+      });
     }
 
     // Insert order
@@ -70,7 +73,6 @@ exports.createOrder = async (req, res) => {
         qty,
         location,
         status || "Pending",
-        
       ]
     );
 
@@ -89,8 +91,122 @@ exports.createOrder = async (req, res) => {
 
   } catch (error) {
     await connection.rollback();
-    console.error(error);
+    console.error("Order creation error:", error);
     res.status(500).json({ message: "Failed to create order" });
+  } finally {
+    connection.release();
+  }
+};
+
+/**
+ * POST /orders/batch
+ * Create multiple orders at once (for cart checkout)
+ */
+exports.createBatchOrders = async (req, res) => {
+  const connection = await db.getConnection();
+
+  try {
+    const {
+      items, // Array of { productId, qty }
+      cust_name,
+      cust_phone,
+      cust_email,
+      location,
+      status,
+    } = req.body;
+
+    // Validation
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "No items provided" });
+    }
+
+    if (!cust_name || !cust_phone || !location) {
+      return res.status(400).json({ message: "Missing required customer information" });
+    }
+
+    await connection.beginTransaction();
+
+    const createdOrders = [];
+    const stockIssues = [];
+
+    // Check stock for all items first
+    for (const item of items) {
+      const [products] = await connection.query(
+        "SELECT stock, name FROM products WHERE id = ?",
+        [item.productId]
+      );
+
+      if (!products.length) {
+        stockIssues.push({
+          productId: item.productId,
+          issue: "Product not found"
+        });
+        continue;
+      }
+
+      if (products[0].stock < item.qty) {
+        stockIssues.push({
+          productId: item.productId,
+          productName: products[0].name,
+          requested: item.qty,
+          available: products[0].stock,
+          issue: `Insufficient stock`
+        });
+      }
+    }
+
+    // If there are any stock issues, rollback and return error
+    if (stockIssues.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Stock issues found",
+        issues: stockIssues
+      });
+    }
+
+    // Create orders and update stock for each item
+    for (const item of items) {
+      // Insert order
+      const [orderResult] = await connection.query(
+        `INSERT INTO orders 
+         (product_id, cust_name, cust_phone, cust_email, qty, location, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          item.productId,
+          cust_name,
+          cust_phone,
+          cust_email || null,
+          item.qty,
+          location,
+          status || "Pending",
+        ]
+      );
+
+      // Reduce product stock
+      await connection.query(
+        "UPDATE products SET stock = stock - ? WHERE id = ?",
+        [item.qty, item.productId]
+      );
+
+      createdOrders.push({
+        orderId: orderResult.insertId,
+        productId: item.productId,
+        quantity: item.qty
+      });
+    }
+
+    await connection.commit();
+
+    res.status(201).json({
+      message: "Orders created successfully",
+      orders: createdOrders,
+      totalOrders: createdOrders.length
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error("Batch order creation error:", error);
+    res.status(500).json({ message: "Failed to create orders" });
   } finally {
     connection.release();
   }

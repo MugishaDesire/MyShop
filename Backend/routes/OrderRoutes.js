@@ -1,13 +1,17 @@
 const express = require("express");
 const router = express.Router();
-const {
-  getOrders,
-  updateOrderStatus,
-  createOrder,
-} = require("../controllers/OrderControllers");
+const orderController = require("../controllers/OrderControllers");
 
-router.get("/", getOrders);
-router.post("/:productId", createOrder);   // ✅ ADD THIS
-router.put("/:id/status", updateOrderStatus);
+// Get all orders
+router.get("/", orderController.getOrders);
+
+// IMPORTANT: /batch must come BEFORE /:productId to avoid conflicts
+router.post("/batch", orderController.createBatchOrders);
+
+// Create single order
+router.post("/:productId", orderController.createOrder);
+
+// Update order status
+router.patch("/:id/status", orderController.updateOrderStatus);
 
 module.exports = router;
