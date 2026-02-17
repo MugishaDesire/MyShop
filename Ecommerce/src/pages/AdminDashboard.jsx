@@ -438,10 +438,17 @@ export default function AdminDashboard() {
                             </div>
                           </div>
                           {p.image && (
-                            <div className="product-image">
-                              <img src={`http://localhost:5000/${p.image}`} alt={p.name} />
-                            </div>
-                          )}
+  <div className="product-image">
+    <img 
+      src={`http://localhost:5000/uploads/${p.image}`}
+      alt={p.name}
+      onError={(e) => {
+        e.target.src = "https://via.placeholder.com/80x80?text=No+Image";
+        e.target.onerror = null;
+      }}
+    />
+  </div>
+)}
                         </div>
                         <div className="actions">
                           <button className="edit-btn" onClick={() => startEdit(p)}>

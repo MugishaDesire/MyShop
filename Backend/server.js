@@ -16,7 +16,7 @@ app.use("/uploads", express.static("uploads"));
 app.use("/products", require("./routes/ProductRoutes"));
 app.use("/orders", require("./routes/OrderRoutes"));
 app.use("/admin", require("./routes/AdminRoutes"));
-
+app.use("/user", require("./routes/UserRoutes"));
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
