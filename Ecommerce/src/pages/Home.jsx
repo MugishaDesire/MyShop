@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { Link, useNavigate } from "react-router-dom";
+import { getWishlist, saveWishlist, toggleWishlist } from "./Wishlist";
 
 export default function Home() {
   const [products, setProducts] = useState([]);
@@ -10,6 +11,9 @@ export default function Home() {
   const [sortBy, setSortBy] = useState("default");
   const [cart, setCart] = useState([]);
   const [user, setUser] = useState(null);
+  const [wishlist, setWishlist] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [imageZoom, setImageZoom] = useState(false);
   const navigate = useNavigate();
 
   // Load user from localStorage on component mount
@@ -24,6 +28,8 @@ export default function Home() {
         localStorage.removeItem("user");
       }
     }
+    // Load wishlist
+    setWishlist(getWishlist());
   }, []);
 
   // Load cart from localStorage on component mount
@@ -78,6 +84,23 @@ export default function Home() {
     });
     
     alert(`✅ ${product.name} added to cart!`);
+  };
+
+  const handleWishlistToggle = (product) => {
+    const added = toggleWishlist(product);
+    setWishlist(getWishlist());
+    // brief visual feedback via window title flash — no alert needed
+  };
+
+  const openProductModal = (product) => {
+    setSelectedProduct(product);
+    document.body.style.overflow = 'hidden';
+  };
+
+  const closeProductModal = () => {
+    setSelectedProduct(null);
+    setImageZoom(false);
+    document.body.style.overflow = 'unset';
   };
 
   const removeFromCart = (productId) => {
@@ -143,11 +166,28 @@ export default function Home() {
         {/* Account Header (when cart is empty) */}
         {totalItemsInCart === 0 && (
           <div className="account-header">
-            <Link to={user ? "/userdashboard" : "/ulogin"} className="header-account-link">
-              <span className="account-icon">👤</span>
-              <span className="account-text">
-                {user ? user.fullname || user.name || user.email : "My Account"}
-              </span>
+            <Link to={user ? "/userdashboard" : "/ulogin"} className={`header-account-link ${user ? "logged-in" : ""}`}>
+              {user ? (
+                <>
+                  <div className="user-avatar">
+                    {((user.fullname || user.name || user.email || "U")
+                      .split(" ")
+                      .map(w => w[0])
+                      .join("")
+                      .toUpperCase()
+                      .slice(0, 2))}
+                  </div>
+                  <div className="user-info-text">
+                    <span className="user-name-display">{user.fullname || user.name || user.email}</span>
+                    <span className="logged-in-badge">● Logged In</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="account-icon">👤</span>
+                  <span className="account-text">My Account</span>
+                </>
+              )}
             </Link>
           </div>
         )}
@@ -157,11 +197,28 @@ export default function Home() {
           <div className="cart-indicator">
             <div className="cart-indicator-content">
               <div className="left-section">
-                <Link to={user ? "/userdashboard" : "/ulogin"} className="my-account-link">
-                  <span className="account-icon">👤</span>
-                  <span className="account-text">
-                    {user ? user.fullname || user.name || user.email : "My Account"}
-                  </span>
+                <Link to={user ? "/userdashboard" : "/ulogin"} className={`my-account-link ${user ? "logged-in" : ""}`}>
+                  {user ? (
+                    <>
+                      <div className="user-avatar-small">
+                        {((user.fullname || user.name || user.email || "U")
+                          .split(" ")
+                          .map(w => w[0])
+                          .join("")
+                          .toUpperCase()
+                          .slice(0, 2))}
+                      </div>
+                      <div className="user-info-text-small">
+                        <span className="user-name-small">{user.fullname || user.name || user.email}</span>
+                        <span className="logged-badge-small">● Logged In</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="account-icon">👤</span>
+                      <span className="account-text">My Account</span>
+                    </>
+                  )}
                 </Link>
               </div>
               <div className="cart-info">
@@ -267,10 +324,16 @@ export default function Home() {
                 const cartItem = cart.find(item => item.id === p.id);
                 const isInCart = !!cartItem;
                 const cartQuantity = cartItem?.quantity || 0;
+                const wishlisted = wishlist.some(w => w.id === p.id);
 
                 return (
                   <div key={p.id} className="product-card">
-                    <div className="product-image-container">
+                    <div 
+                      className="product-image-container"
+                      onClick={() => openProductModal(p)}
+                      style={{ cursor: 'pointer' }}
+                      title="Click to view details"
+                    >
                       <img
                         src={p.image
                           ? `http://localhost:5000/uploads/${p.image}`
@@ -291,6 +354,13 @@ export default function Home() {
                       {isInCart && (
                         <div className="in-cart-badge">In Cart: {cartQuantity}</div>
                       )}
+                      <button
+                        className={`heart-btn${wishlisted ? " hearted" : ""}`}
+                        onClick={() => handleWishlistToggle(p)}
+                        title={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
+                      >
+                        {wishlisted ? "❤️" : "🤍"}
+                      </button>
                     </div>
 
                     <div className="product-content">
@@ -315,6 +385,12 @@ export default function Home() {
                           </span>
                         </div>
 
+                        {/* <button
+                          className="view-details-button"
+                          onClick={() => openProductModal(p)}
+                        >
+                          👁️ View Details
+                        </button> */}
                         <div className="button-group">
                           <button
                             className="add-to-cart-button"
@@ -578,6 +654,408 @@ export default function Home() {
         .featured-add-to-cart:hover { background: #d97706; transform: translateY(-2px); }
         .featured-button { background: white; color: #7c3aed; border: none; padding: 0.75rem 2rem; border-radius: 50px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
         .featured-button:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+
+        /* Heart button on product cards */
+        .heart-btn {
+          position: absolute;
+          bottom: 0.75rem;
+          right: 0.75rem;
+          background: rgba(255,255,255,0.92);
+          border: none;
+          border-radius: 50%;
+          width: 34px;
+          height: 34px;
+          font-size: 1rem;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+          transition: all 0.2s ease;
+          z-index: 5;
+        }
+        .heart-btn:hover { transform: scale(1.15); box-shadow: 0 4px 12px rgba(225,29,72,0.25); }
+        .heart-btn.hearted { background: #fff1f2; }
+        .heart-btn.hearted:hover { transform: scale(1.15); }
+
+
+        /* Logged-in user indicator styles */
+        .header-account-link.logged-in {
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          padding: 0.5rem 1rem;
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+        .header-account-link.logged-in:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+        }
+        .user-avatar {
+          width: 40px;
+          height: 40px;
+          background: white;
+          color: #059669;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 800;
+          font-size: 0.9rem;
+          font-family: 'DM Sans', sans-serif;
+        }
+        .user-info-text {
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+          align-items: flex-start;
+        }
+        .user-name-display {
+          color: white;
+          font-weight: 700;
+          font-size: 0.95rem;
+        }
+        .logged-in-badge {
+          color: rgba(255, 255, 255, 0.85);
+          font-size: 0.75rem;
+          font-weight: 600;
+        }
+
+        /* Cart indicator logged-in styles */
+        .my-account-link.logged-in {
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          padding: 0.4rem 0.8rem;
+          border-radius: 10px;
+          box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+        }
+        .my-account-link.logged-in:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+        }
+        .user-avatar-small {
+          width: 32px;
+          height: 32px;
+          background: white;
+          color: #059669;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 800;
+          font-size: 0.75rem;
+          font-family: 'DM Sans', sans-serif;
+        }
+        .user-info-text-small {
+          display: flex;
+          flex-direction: column;
+          gap: 0.1rem;
+        }
+        .user-name-small {
+          color: white;
+          font-weight: 700;
+          font-size: 0.85rem;
+        }
+        .logged-badge-small {
+          color: rgba(255, 255, 255, 0.85);
+          font-size: 0.7rem;
+          font-weight: 600;
+        }
+
+
+        /* View Details Button */
+        .view-details-button {
+          width: 100%;
+          padding: 0.65rem;
+          background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-weight: 600;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          margin-bottom: 0.75rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+        }
+        .view-details-button:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        }
+
+        /* Modal Overlay */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.75);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+          padding: 20px;
+          animation: fadeIn 0.2s ease;
+          backdrop-filter: blur(4px);
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        /* Modal Content */
+        .modal-content {
+          background: white;
+          border-radius: 20px;
+          max-width: 1000px;
+          width: 100%;
+          max-height: 90vh;
+          overflow-y: auto;
+          position: relative;
+          animation: slideUp 0.3s ease;
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(30px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Modal Close Button */
+        .modal-close {
+          position: absolute;
+          top: 20px;
+          right: 20px;
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;
+          background: rgba(0, 0, 0, 0.1);
+          border: none;
+          font-size: 20px;
+          cursor: pointer;
+          z-index: 10;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #64748b;
+        }
+        .modal-close:hover {
+          background: #ef4444;
+          color: white;
+          transform: rotate(90deg);
+        }
+
+        /* Modal Body Layout */
+        .modal-body {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 2rem;
+          padding: 2rem;
+        }
+
+        /* Image Section */
+        .modal-image-section {
+          position: relative;
+        }
+        .modal-image-wrapper {
+          position: relative;
+          border-radius: 16px;
+          overflow: hidden;
+          background: #f8fafc;
+          cursor: zoom-in;
+          transition: all 0.3s ease;
+        }
+        .modal-image-wrapper.zoomed {
+          cursor: zoom-out;
+        }
+        .modal-image-wrapper.zoomed .modal-product-image {
+          transform: scale(1.5);
+        }
+        .modal-product-image {
+          width: 100%;
+          height: auto;
+          display: block;
+          transition: transform 0.3s ease;
+        }
+        .zoom-hint {
+          position: absolute;
+          bottom: 10px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.7);
+          color: white;
+          padding: 6px 12px;
+          border-radius: 20px;
+          font-size: 0.8rem;
+          font-weight: 600;
+          opacity: 0;
+          transition: opacity 0.2s ease;
+          pointer-events: none;
+        }
+        .modal-image-wrapper:hover .zoom-hint {
+          opacity: 1;
+        }
+        .modal-stock-badge {
+          margin-top: 1rem;
+          display: inline-block;
+          padding: 0.5rem 1rem;
+          border-radius: 20px;
+          font-size: 0.85rem;
+          font-weight: 700;
+        }
+        .modal-stock-badge.out { background: #fee2e2; color: #dc2626; }
+        .modal-stock-badge.low { background: #fef3c7; color: #d97706; }
+        .modal-stock-badge.in { background: #d1fae5; color: #059669; }
+
+        /* Details Section */
+        .modal-details-section {
+          display: flex;
+          flex-direction: column;
+          gap: 1.5rem;
+        }
+        .modal-product-name {
+          font-size: 1.8rem;
+          font-weight: 800;
+          color: #1e293b;
+          margin: 0;
+          line-height: 1.2;
+        }
+        .modal-price-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          flex-wrap: wrap;
+          gap: 1rem;
+        }
+        .modal-price {
+          font-size: 2rem;
+          font-weight: 800;
+          color: #10b981;
+        }
+        .modal-wishlist-btn {
+          padding: 0.5rem 1rem;
+          border-radius: 20px;
+          border: 2px solid #e2e8f0;
+          background: white;
+          font-weight: 600;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        .modal-wishlist-btn:hover {
+          border-color: #e11d48;
+          background: #fff1f2;
+        }
+        .modal-wishlist-btn.active {
+          background: #fee2e2;
+          border-color: #e11d48;
+          color: #be123c;
+        }
+
+        /* Description */
+        .modal-description h3 {
+          font-size: 1rem;
+          font-weight: 700;
+          color: #475569;
+          margin-bottom: 0.5rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+        .modal-description p {
+          color: #64748b;
+          line-height: 1.6;
+          font-size: 0.95rem;
+        }
+
+        /* Info Grid */
+        .modal-info-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1rem;
+          background: #f8fafc;
+          padding: 1.5rem;
+          border-radius: 12px;
+        }
+        .info-item {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+        .info-label {
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #94a3b8;
+          font-weight: 600;
+        }
+        .info-value {
+          font-size: 0.95rem;
+          font-weight: 600;
+          color: #1e293b;
+        }
+        .info-value.available { color: #059669; }
+        .info-value.unavailable { color: #dc2626; }
+
+        /* Modal Actions */
+        .modal-actions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1rem;
+          margin-top: auto;
+        }
+        .modal-add-to-cart, .modal-buy-now {
+          padding: 1rem;
+          border: none;
+          border-radius: 12px;
+          font-weight: 700;
+          font-size: 1rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+        }
+        .modal-add-to-cart {
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          color: white;
+        }
+        .modal-add-to-cart:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 16px rgba(16, 185, 129, 0.3);
+        }
+        .modal-buy-now {
+          background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+          color: white;
+        }
+        .modal-buy-now:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 16px rgba(59, 130, 246, 0.3);
+        }
+        .modal-add-to-cart:disabled, .modal-buy-now:disabled {
+          background: #cbd5e1;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        /* Responsive Modal */
+        @media (max-width: 768px) {
+          .modal-body {
+            grid-template-columns: 1fr;
+          }
+          .modal-actions {
+            grid-template-columns: 1fr;
+          }
+          .modal-product-name {
+            font-size: 1.4rem;
+          }
+          .modal-price {
+            font-size: 1.5rem;
+          }
+        }
+
         @media (max-width: 768px) {
           .home-container { padding: 1rem; padding-top: ${totalItemsInCart > 0 ? '120px' : '1rem'}; }
           .hero-title { font-size: 2rem; }
@@ -597,6 +1075,115 @@ export default function Home() {
           .add-to-cart-button, .buy-now-button { width: 100%; justify-content: center; }
         }
       `}</style>
+
+      {/* Product Details Modal */}
+      {selectedProduct && (
+        <div className="modal-overlay" onClick={closeProductModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={closeProductModal}>✕</button>
+            
+            <div className="modal-body">
+              {/* Image Section */}
+              <div className="modal-image-section">
+                <div 
+                  className={`modal-image-wrapper ${imageZoom ? 'zoomed' : ''}`}
+                  onClick={() => setImageZoom(!imageZoom)}
+                  title={imageZoom ? "Click to zoom out" : "Click to zoom in"}
+                >
+                  <img
+                    src={selectedProduct.image
+                      ? `http://localhost:5000/uploads/${selectedProduct.image}`
+                      : "https://placehold.co/600x500/3b82f6/white?text=No+Image"
+                    }
+                    alt={selectedProduct.name}
+                    className="modal-product-image"
+                    onError={(e) => {
+                      e.target.src = "https://placehold.co/600x500/3b82f6/white?text=No+Image";
+                      e.target.onerror = null;
+                    }}
+                  />
+                  <div className="zoom-hint">{imageZoom ? "🔍 Click to zoom out" : "🔍 Click to zoom in"}</div>
+                </div>
+                
+                {/* Stock Badge */}
+                {selectedProduct.stock <= 0 ? (
+                  <div className="modal-stock-badge out">Out of Stock</div>
+                ) : selectedProduct.stock < 10 ? (
+                  <div className="modal-stock-badge low">Only {selectedProduct.stock} left</div>
+                ) : (
+                  <div className="modal-stock-badge in">{selectedProduct.stock} in stock</div>
+                )}
+              </div>
+
+              {/* Details Section */}
+              <div className="modal-details-section">
+                <h2 className="modal-product-name">{selectedProduct.name || "Unnamed Product"}</h2>
+                <div className="modal-price-row">
+                  <span className="modal-price">${parseFloat(selectedProduct.price || 0).toFixed(2)}</span>
+                  <button
+                    className={`modal-wishlist-btn ${wishlist.some(w => w.id === selectedProduct.id) ? 'active' : ''}`}
+                    onClick={() => handleWishlistToggle(selectedProduct)}
+                  >
+                    {wishlist.some(w => w.id === selectedProduct.id) ? '❤️ Wishlisted' : '🤍 Add to Wishlist'}
+                  </button>
+                </div>
+
+                {/* Description */}
+                <div className="modal-description">
+                  <h3>Description</h3>
+                  <p>{selectedProduct.description || "No description available for this product."}</p>
+                </div>
+
+                {/* Product Info Grid */}
+                <div className="modal-info-grid">
+                  <div className="info-item">
+                    <span className="info-label">Product ID</span>
+                    <span className="info-value">#{selectedProduct.id}</span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Category</span>
+                    <span className="info-value">{selectedProduct.category || "General"}</span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Availability</span>
+                    <span className={`info-value ${selectedProduct.stock > 0 ? 'available' : 'unavailable'}`}>
+                      {selectedProduct.stock > 0 ? 'In Stock' : 'Out of Stock'}
+                    </span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Stock Level</span>
+                    <span className="info-value">{selectedProduct.stock} units</span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="modal-actions">
+                  <button
+                    className="modal-add-to-cart"
+                    onClick={() => {
+                      addToCart(selectedProduct);
+                      closeProductModal();
+                    }}
+                    disabled={selectedProduct.stock <= 0}
+                  >
+                    🛒 Add to Cart
+                  </button>
+                  <button
+                    className="modal-buy-now"
+                    onClick={() => {
+                      handleBuyNow(selectedProduct);
+                      closeProductModal();
+                    }}
+                    disabled={selectedProduct.stock <= 0}
+                  >
+                    ⚡ Buy Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 
 export default function OrderForm() {
@@ -7,7 +7,7 @@ export default function OrderForm() {
   const navigate = useNavigate();
   const { productId } = useParams();
 
-  const isCheckoutPage = window.location.pathname.includes("/checkout");
+  const isCheckoutPage = useRef(window.location.pathname.includes("/checkout")).current;
 
   const [product, setProduct] = useState(null);
   const [cartItems, setCartItems] = useState([]);
@@ -25,7 +25,7 @@ export default function OrderForm() {
     locationText: "",
   });
 
-  // ✅ Load user and auto-fill form
+  // Load user and auto-fill form
   useEffect(() => {
     const userData = localStorage.getItem("user");
     if (userData && userData !== "undefined" && userData !== "null") {
@@ -50,7 +50,15 @@ export default function OrderForm() {
     price: parseFloat(item.price) || 0,
   });
 
-  // Load product or cart
+  // Safe fallback: logged-in users go to dashboard, guests go home
+  const navigateFallback = () => {
+    const storedUser = localStorage.getItem("user");
+    const hasUser = storedUser && storedUser !== "undefined" && storedUser !== "null";
+    navigate(hasUser ? "/userdashboard" : "/");
+  };
+
+  // Load product or cart — runs ONCE at mount only ([] dep array)
+  // isCheckoutPage is a stable ref value so it's safe to exclude from deps
   useEffect(() => {
     if (isCheckoutPage) {
       const cartFromState = location.state?.cart;
@@ -60,12 +68,17 @@ export default function OrderForm() {
         const savedCart = localStorage.getItem("shoppingCart");
         if (savedCart) {
           try {
-            setCartItems(JSON.parse(savedCart).map(ensureNumberPrice));
+            const parsed = JSON.parse(savedCart);
+            if (parsed.length > 0) {
+              setCartItems(parsed.map(ensureNumberPrice));
+            } else {
+              navigateFallback();
+            }
           } catch {
-            navigate("/");
+            navigateFallback();
           }
         } else {
-          navigate("/");
+          navigateFallback();
         }
       }
     } else {
@@ -75,12 +88,13 @@ export default function OrderForm() {
         axios
           .get(`http://localhost:5000/products/${productId}`)
           .then((res) => setProduct(ensureNumberPrice(res.data)))
-          .catch(() => navigate("/"));
+          .catch(() => navigateFallback());
       } else {
-        navigate("/");
+        navigateFallback();
       }
     }
-  }, [isCheckoutPage, location.state, productId, navigate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount only — isCheckoutPage is frozen, location.state won't change
 
   // Calculate totals
   useEffect(() => {
@@ -98,37 +112,42 @@ export default function OrderForm() {
     if (errors[field]) setErrors((prev) => ({ ...prev, [field]: "" }));
   };
 
-  const updateQuantity = (productId, newQuantity) => {
-    if (newQuantity < 1) { removeItem(productId); return; }
-    setCartItems((prevCart) => {
-      const updated = prevCart.map((item) => {
-        if (item.id !== productId) return item;
-        if (newQuantity > item.stock) { alert(`Only ${item.stock} items available for ${item.name}`); return item; }
-        return { ...item, quantity: newQuantity };
+  const updateQuantity = (id, newQty) => {
+    if (newQty < 1) { removeItem(id); return; }
+    setCartItems((prev) => {
+      const updated = prev.map((item) => {
+        if (item.id !== id) return item;
+        if (newQty > item.stock) {
+          alert(`Only ${item.stock} items available for ${item.name}`);
+          return item;
+        }
+        return { ...item, quantity: newQty };
       });
       localStorage.setItem("shoppingCart", JSON.stringify(updated));
       return updated;
     });
   };
 
-  const removeItem = (productId) => {
-    const newCart = cartItems.filter((item) => item.id !== productId);
+  const removeItem = (id) => {
+    const newCart = cartItems.filter((item) => item.id !== id);
     setCartItems(newCart);
     localStorage.setItem("shoppingCart", JSON.stringify(newCart));
-    if (newCart.length === 0) navigate(user ? "/userdashboard" : "/");
-    // user state is already loaded at mount, so this correctly routes logged-in users to dashboard
+    if (newCart.length === 0) navigateFallback();
   };
 
   const validateForm = () => {
     const newErrors = {};
     if (!formData.customer.trim()) newErrors.customer = "Name is required";
     if (!formData.telephone.trim()) newErrors.telephone = "Phone number is required";
-    else if (!/^[0-9+ ]{7,15}$/.test(formData.telephone)) newErrors.telephone = "Enter a valid phone number (7-15 digits)";
-    if (formData.email && !/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = "Enter a valid email address";
+    else if (!/^[0-9+ ]{7,15}$/.test(formData.telephone))
+      newErrors.telephone = "Enter a valid phone number (7-15 digits)";
+    if (formData.email && !/\S+@\S+\.\S+/.test(formData.email))
+      newErrors.email = "Enter a valid email address";
     if (!formData.locationText.trim()) newErrors.locationText = "Delivery location is required";
     if (!isCheckoutPage && product) {
       if (formData.quantity < 1) newErrors.quantity = "Quantity must be at least 1";
-      else if (formData.quantity > product.stock) newErrors.quantity = `Only ${product.stock} items available`;
+      else if (formData.quantity > product.stock)
+        newErrors.quantity = `Only ${product.stock} items available`;
     }
     if (isCheckoutPage && cartItems.length === 0) {
       alert("Your cart is empty! Please add items before checking out.");
@@ -138,9 +157,9 @@ export default function OrderForm() {
     return Object.keys(newErrors).length === 0;
   };
 
-  // ✅ Helper: always go to dashboard if logged in, otherwise home
+  // After a successful order: use the `user` state (loaded at mount, never cleared)
+  // This is more reliable than re-reading localStorage after we may have cleared cart
   const goAfterOrder = () => {
-    // Use the `user` state loaded at mount — most reliable
     if (user) {
       navigate("/userdashboard");
     } else {
@@ -170,11 +189,12 @@ export default function OrderForm() {
           headers: { "Content-Type": "application/json" },
         });
 
-        // ✅ Clear cart after successful checkout
+        // Clear cart AFTER the API call succeeds
         localStorage.removeItem("shoppingCart");
 
-        alert(`✅ Order placed successfully! ${cartItems.length} item(s) ordered.`);
-        goAfterOrder();
+        alert(`Order placed successfully! ${cartItems.length} item(s) ordered.`);
+        goAfterOrder(); // user state still set here — goes to /userdashboard
+
       } else {
         const newOrder = {
           product_id: productId,
@@ -192,33 +212,33 @@ export default function OrderForm() {
           headers: { "Content-Type": "application/json" },
         });
 
-        alert("✅ Order placed successfully!");
-        goAfterOrder();
+        alert("Order placed successfully!");
+        goAfterOrder(); // goes to /userdashboard
       }
     } catch (err) {
       console.error("Order error:", err);
 
       if (err.response?.status === 400 && err.response?.data?.issues) {
         const issues = err.response.data.issues;
-        let message = "⚠️ Cannot complete order:\n\n";
+        let message = "Cannot complete order:\n\n";
         issues.forEach((issue) => {
           if (issue.issue === "Product not found") {
-            message += `• Product ID ${issue.productId}: Not found in system\n`;
+            message += `Product ID ${issue.productId}: Not found\n`;
           } else if (issue.issue === "Insufficient stock") {
-            message += `• ${issue.productName}:\n  Requested: ${issue.requested}\n  Available: ${issue.available}\n\n`;
+            message += `${issue.productName}: Requested ${issue.requested}, only ${issue.available} available\n`;
           } else {
-            message += `• ${issue.productName || "Product"}: ${issue.issue}\n`;
+            message += `${issue.productName || "Product"}: ${issue.issue}\n`;
           }
         });
         alert(message);
       } else if (err.response?.data?.message) {
-        alert(`❌ ${err.response.data.message}`);
+        alert(err.response.data.message);
       } else if (err.response?.status === 500) {
-        alert("❌ Server error. Please try again or contact support.");
+        alert("Server error. Please try again or contact support.");
       } else if (err.code === "ECONNABORTED" || err.code === "ERR_NETWORK") {
-        alert("❌ Network error. Please check your connection.");
+        alert("Network error. Please check your connection.");
       } else {
-        alert("❌ Failed to place order. Please try again.");
+        alert("Failed to place order. Please try again.");
       }
     } finally {
       setLoading(false);
@@ -231,7 +251,7 @@ export default function OrderForm() {
         <div className="empty-cart-icon">🛒</div>
         <h2>Your cart is empty</h2>
         <p>Please add items to your cart before placing an order.</p>
-        <button onClick={() => navigate(user ? "/userdashboard" : "/")}>
+        <button onClick={() => (user ? navigate("/userdashboard") : navigate("/"))}>
           {user ? "Back to Dashboard" : "Continue Shopping"}
         </button>
         <style>{`
@@ -239,7 +259,7 @@ export default function OrderForm() {
           .empty-cart-icon { font-size: 5rem; opacity: 0.5; }
           .empty-cart-message h2 { color: #1e293b; margin: 0; }
           .empty-cart-message p { color: #64748b; margin: 0; }
-          .empty-cart-message button { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 0.75rem 2rem; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+          .empty-cart-message button { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 0.75rem 2rem; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
           .empty-cart-message button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
         `}</style>
       </div>
@@ -249,10 +269,10 @@ export default function OrderForm() {
   return (
     <>
       <div className="order-container">
-        {/* Back button */}
+        {/* Back bar */}
         <div className="order-back-bar">
-          <button className="back-btn" onClick={() => navigate(user ? "/userdashboard" : -1)}>
-            ← {user ? "Back to Dashboard" : "Back"}
+          <button className="back-btn" onClick={() => (user ? navigate("/userdashboard") : navigate(-1))}>
+            {user ? "← Back to Dashboard" : "← Back"}
           </button>
           {user && (
             <div className="user-indicator">
@@ -267,7 +287,6 @@ export default function OrderForm() {
           <h2 className="order-title">
             {isCheckoutPage ? "Checkout" : "Place Your Order"}
           </h2>
-
           <div className="order-summary">
             {isCheckoutPage ? (
               <>
@@ -312,19 +331,16 @@ export default function OrderForm() {
                         )}
                       </div>
                     </div>
-
                     <div className="item-controls">
                       <div className="quantity-control">
                         <button type="button" className="qty-btn" onClick={() => updateQuantity(item.id, item.quantity - 1)} disabled={item.quantity <= 1}>−</button>
                         <input type="number" min="1" max={item.stock} value={item.quantity} onChange={(e) => updateQuantity(item.id, parseInt(e.target.value) || 1)} className="quantity-input" />
                         <button type="button" className="qty-btn" onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={item.quantity >= item.stock}>+</button>
                       </div>
-
                       <div className="item-total">
                         <span>Item Total:</span>
                         <span className="item-total-price">${(item.price * item.quantity).toFixed(2)}</span>
                       </div>
-
                       <button type="button" className="remove-btn" onClick={() => removeItem(item.id)}>Remove</button>
                     </div>
                   </div>
@@ -365,7 +381,7 @@ export default function OrderForm() {
 
           {user && (
             <div className="auto-fill-notice">
-              <span>ℹ️</span> Your information has been auto-filled from your account. You can edit it if needed.
+              <span>ℹ️</span> Your information has been auto-filled from your account. You can edit if needed.
             </div>
           )}
 
@@ -387,7 +403,6 @@ export default function OrderForm() {
             {errors.email && <span className="error-message">{errors.email}</span>}
           </div>
 
-          {/* Quantity (single item only) */}
           {!isCheckoutPage && product && (
             <div className="form-group">
               <label htmlFor="quantity">Quantity <span className="required">*</span> <span className="hint">(Max: {product.stock})</span></label>
@@ -407,7 +422,7 @@ export default function OrderForm() {
           </div>
 
           <div className="form-actions">
-            <button type="button" className="btn-secondary" onClick={() => navigate(user ? "/userdashboard" : -1)} disabled={loading}>
+            <button type="button" className="btn-secondary" onClick={() => (user ? navigate("/userdashboard") : navigate(-1))} disabled={loading}>
               {isCheckoutPage ? "Back to Dashboard" : "Cancel"}
             </button>
             <button type="submit" className="btn-primary" disabled={loading || (isCheckoutPage && cartItems.length === 0)}>
@@ -421,40 +436,19 @@ export default function OrderForm() {
 
           <div className="form-footer">
             <p className="note"><span className="required">*</span> Required fields</p>
-            <p className="disclaimer">By placing this order, you agree to our terms and conditions. You'll receive a confirmation via email/SMS.</p>
+            <p className="disclaimer">By placing this order, you agree to our terms and conditions. You will receive a confirmation via email/SMS.</p>
           </div>
         </form>
       </div>
 
       <style>{`
         .order-container { max-width: 800px; margin: 40px auto; padding: 0 20px 60px; }
-
-        /* Back bar */
-        .order-back-bar {
-          display: flex; align-items: center; justify-content: space-between;
-          margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;
-        }
-        .back-btn {
-          background: #f1f5f9; color: #475569; border: none; padding: 0.6rem 1.2rem;
-          border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.95rem;
-          transition: all 0.2s ease;
-        }
+        .order-back-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
+        .back-btn { background: #f1f5f9; color: #475569; border: none; padding: 0.6rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.95rem; transition: all 0.2s ease; }
         .back-btn:hover { background: #e2e8f0; transform: translateX(-2px); }
-        .user-indicator {
-          display: flex; align-items: center; gap: 0.5rem;
-          background: #d1fae5; color: #065f46; padding: 0.5rem 1rem;
-          border-radius: 50px; font-size: 0.875rem;
-        }
-        .indicator-dot {
-          width: 20px; height: 20px; background: #10b981; color: white;
-          border-radius: 50%; display: flex; align-items: center; justify-content: center;
-          font-size: 0.75rem; font-weight: 700;
-        }
-
-        .order-header {
-          background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
-          padding: 30px; border-radius: 16px 16px 0 0; color: white; margin-bottom: 2px;
-        }
+        .user-indicator { display: flex; align-items: center; gap: 0.5rem; background: #d1fae5; color: #065f46; padding: 0.5rem 1rem; border-radius: 50px; font-size: 0.875rem; }
+        .indicator-dot { width: 20px; height: 20px; background: #10b981; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; }
+        .order-header { background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); padding: 30px; border-radius: 16px 16px 0 0; color: white; margin-bottom: 2px; }
         .order-title { font-size: 2rem; font-weight: 800; margin-bottom: 20px; text-align: center; }
         .order-summary h3 { font-size: 1.3rem; margin: 0 0 12px 0; opacity: 0.9; }
         .summary-info { display: flex; justify-content: space-between; align-items: center; }
@@ -463,7 +457,6 @@ export default function OrderForm() {
         .price-info { display: flex; gap: 12px; color: rgba(255,255,255,0.9); font-size: 0.95rem; }
         .price { font-weight: 600; }
         .stock-hint { opacity: 0.8; }
-
         .cart-items-section { background: white; padding: 25px; border-radius: 0 0 12px 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
         .section-title { font-size: 1.2rem; color: #1e293b; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #f1f5f9; }
         .auto-fill-notice { background: #dbeafe; color: #1e40af; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
@@ -484,15 +477,13 @@ export default function OrderForm() {
         .quantity-input { width: 60px; padding: 8px; text-align: center; border: 2px solid #e2e8f0; border-radius: 6px; font-size: 1rem; }
         .item-total { display: flex; flex-direction: column; align-items: flex-end; font-size: 0.9rem; color: #64748b; }
         .item-total-price { font-weight: 600; color: #1e293b; font-size: 1.1rem; }
-        .remove-btn { background: #fee2e2; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+        .remove-btn { background: #fee2e2; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
         .remove-btn:hover { background: #fecaca; }
-
         .summary-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 25px; border: 2px solid #3b82f6; }
         .summary-row { display: flex; justify-content: space-between; margin-bottom: 12px; color: #475569; font-size: 1rem; }
         .summary-item { display: flex; justify-content: space-between; margin-bottom: 8px; padding-left: 20px; color: #64748b; font-size: 0.95rem; }
         .summary-row.total { margin-top: 15px; padding-top: 15px; border-top: 2px solid #e2e8f0; font-weight: 700; color: #1e293b; font-size: 1.2rem; }
         .total-price { color: #059669; font-size: 1.4rem; font-weight: 800; }
-
         .order-form { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #334155; font-size: 0.9rem; }
@@ -502,21 +493,18 @@ export default function OrderForm() {
         .order-form input:focus, .order-form textarea:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
         .order-form input.error, .order-form textarea.error { border-color: #ef4444; }
         .error-message { color: #ef4444; font-size: 0.85rem; margin-top: 4px; display: block; }
-
         .form-actions { display: flex; gap: 12px; margin-top: 30px; }
         .btn-primary, .btn-secondary { flex: 1; padding: 16px; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
-        .btn-primary { background: linear-gradient(135deg, #059669, #047857); color: white; }
+        .btn-primary { background: linear-gradient(135deg, #059669, #047857); color: white; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, #047857, #065f46); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
         .btn-primary:disabled { background: #94a3b8; opacity: 0.7; cursor: not-allowed; }
         .btn-secondary { background: #f1f5f9; color: #475569; }
         .btn-secondary:hover:not(:disabled) { background: #e2e8f0; }
-        .spinner { display: inline-block; width: 16px; height: 16px; margin-right: 8px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: white; animation: spin 1s ease-in-out infinite; }
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: white; animation: spin 1s ease-in-out infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-
         .form-footer { margin-top: 25px; text-align: center; }
         .note { color: #64748b; font-size: 0.85rem; margin-bottom: 10px; }
         .disclaimer { color: #94a3b8; font-size: 0.8rem; font-style: italic; line-height: 1.4; }
-
         @media (max-width: 768px) {
           .order-container { padding: 0 15px 40px; }
           .order-back-bar { flex-direction: column; align-items: stretch; }

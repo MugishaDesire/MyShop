@@ -15,6 +15,21 @@ const Ulogin = ({ onLogin }) => {
   const redirectAfterLogin =
     location.state?.from || localStorage.getItem("redirectAfterLogin") || null;
 
+  // // ✅ AUTO-REDIRECT: If user is already logged in, go straight to dashboard
+  // useEffect(() => {
+  //   const userData = localStorage.getItem("user");
+  //   if (userData && userData !== "undefined" && userData !== "null") {
+  //     try {
+  //       JSON.parse(userData); // validate it's valid JSON
+  //       navigate("/userdashboard", { replace: true });
+  //       return;
+  //     } catch {
+  //       // Invalid user data, clear it
+  //       localStorage.removeItem("user");
+  //     }
+  //   }
+  // }, [navigate]);
+
   useEffect(() => {
     const rememberedEmail = localStorage.getItem("rememberedEmail");
     if (rememberedEmail) {

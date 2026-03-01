@@ -1,49 +1,114 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import axios from "axios";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 
 export default function UserDashboard() {
   const [user, setUser] = useState(null);
   const [products, setProducts] = useState([]);
-  const [recentOrders, setRecentOrders] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("default");
   const [cart, setCart] = useState([]);
-  const [stats, setStats] = useState({
-    totalOrders: 0,
-    totalSpent: 0,
-    wishlistCount: 0,
-    pendingOrders: 0,
-    totalItems: 0,
-  });
 
   const navigate = useNavigate();
   const location = useLocation();
 
-  // ✅ Handle pending redirect AFTER dashboard finishes loading
-  // This runs once when loading flips from true → false
+  // ─── Enrich raw orders with product info (same as admin) ───────────────────
+  const enrichedOrders = useMemo(() => {
+    return orders.map((order) => {
+      const product = products.find((p) => p.id === order.product_id);
+      const productPrice = product ? parseFloat(product.price) : 0;
+      const quantity = parseInt(order.qty) || 1;
+      return {
+        ...order,
+        productName: product ? product.name : `Product #${order.product_id}`,
+        productPrice,
+        total: productPrice * quantity,
+      };
+    });
+  }, [orders, products]);
+
+  // ─── Group orders placed together (same phone + location + within 1 min) ───
+  const groupedOrders = useMemo(() => {
+    const groups = {};
+
+    enrichedOrders.forEach((order) => {
+      const orderTime = new Date(order.created_at || order.date || Date.now());
+      const timeKey = Math.floor(orderTime.getTime() / (60 * 1000));
+      const groupKey = `${order.cust_phone}_${order.location}_${timeKey}`;
+
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          id: order.id,
+          cust_name: order.cust_name,
+          cust_phone: order.cust_phone,
+          cust_email: order.cust_email,
+          location: order.location,
+          status: order.status,
+          created_at: order.created_at || order.date,
+          items: [],
+          orderIds: [],
+        };
+      }
+
+      groups[groupKey].items.push({
+        id: order.id,
+        productName: order.productName,
+        qty: order.qty,
+        price: order.productPrice,
+        subtotal: order.total,
+      });
+
+      groups[groupKey].orderIds.push(order.id);
+
+      // Keep the highest-priority status in the group
+      const priority = { Delivered: 3, Paid: 2, Pending: 1 };
+      if ((priority[order.status] || 0) > (priority[groups[groupKey].status] || 0)) {
+        groups[groupKey].status = order.status;
+      }
+    });
+
+    return Object.values(groups)
+      .map((g) => ({
+        ...g,
+        totalAmount: g.items.reduce((s, i) => s + i.subtotal, 0),
+        totalItems: g.items.reduce((s, i) => s + parseInt(i.qty), 0),
+      }))
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }, [enrichedOrders]);
+
+  // ─── Derived stats ──────────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const totalSpent = groupedOrders.reduce((s, o) => s + o.totalAmount, 0);
+    const pendingOrders = groupedOrders.filter(
+      (o) => o.status !== "Delivered" && o.status !== "Paid"
+    ).length;
+    const totalItems = groupedOrders.reduce((s, o) => s + o.totalItems, 0);
+    return {
+      totalOrders: groupedOrders.length,
+      totalSpent,
+      pendingOrders,
+      totalItems,
+      wishlistCount: 0,
+    };
+  }, [groupedOrders]);
+
+  // ─── Handle pending redirect after loading ──────────────────────────────────
   useEffect(() => {
     if (loading) return;
-
     const state = location.state || {};
     const { pendingRedirect, pendingCart, pendingProduct, loggedInUser } = state;
-
     if (!pendingRedirect) return;
 
-    // Clear location state so back-button doesn't retrigger
     window.history.replaceState({}, document.title);
 
     const currentUser =
       loggedInUser ||
       (() => {
-        try {
-          return JSON.parse(localStorage.getItem("user"));
-        } catch {
-          return null;
-        }
+        try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
       })();
 
     if (pendingRedirect === "checkout") {
@@ -51,36 +116,30 @@ export default function UserDashboard() {
         pendingCart?.length > 0
           ? pendingCart
           : JSON.parse(localStorage.getItem("shoppingCart") || "[]");
-
       if (cartToUse.length > 0) {
         navigate("/checkout", { state: { cart: cartToUse, user: currentUser } });
       }
     } else if (pendingRedirect.startsWith("order/") && pendingProduct) {
-      navigate(`/${pendingRedirect}`, {
-        state: { product: pendingProduct, user: currentUser },
-      });
+      navigate(`/${pendingRedirect}`, { state: { product: pendingProduct, user: currentUser } });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]); // ← intentionally only fires once when dashboard is ready
+  }, [loading]);
 
-  // Load cart from localStorage
+  // ─── Load cart from localStorage ───────────────────────────────────────────
   useEffect(() => {
-    const savedCart = localStorage.getItem("shoppingCart");
-    if (savedCart) {
-      try {
-        setCart(JSON.parse(savedCart));
-      } catch (e) {
-        console.error("Error parsing cart:", e);
-      }
+    try {
+      const saved = localStorage.getItem("shoppingCart");
+      if (saved) setCart(JSON.parse(saved));
+    } catch (e) {
+      console.error("Error parsing cart:", e);
     }
   }, []);
 
-  // Sync cart to localStorage
   useEffect(() => {
     localStorage.setItem("shoppingCart", JSON.stringify(cart));
   }, [cart]);
 
-  // Load user and dashboard data
+  // ─── Load user + fetch products & orders from backend ──────────────────────
   useEffect(() => {
     const userData = localStorage.getItem("user");
 
@@ -90,8 +149,9 @@ export default function UserDashboard() {
       return;
     }
 
+    let parsedUser;
     try {
-      const parsedUser = JSON.parse(userData);
+      parsedUser = JSON.parse(userData);
       if (!parsedUser || typeof parsedUser !== "object") throw new Error("Bad user data");
       setUser(parsedUser);
     } catch (e) {
@@ -101,61 +161,28 @@ export default function UserDashboard() {
       return;
     }
 
-    const fetchDashboardData = async () => {
+    const fetchData = async () => {
       try {
-        const productsRes = await axios.get("http://localhost:5000/products");
+        // Fetch products and all orders in parallel (same as admin)
+        const [productsRes, ordersRes] = await Promise.all([
+          axios.get("http://localhost:5000/products"),
+          axios.get("http://localhost:5000/orders"),
+        ]);
+
         setProducts(productsRes.data);
 
-        const mockOrders = [
-          {
-            id: "ORD-1001",
-            date: "2024-02-15",
-            total: 299.99,
-            status: "Delivered",
-            items: 3,
-            products: ["Wireless Headphones", "Phone Case", "Screen Protector"],
-          },
-          {
-            id: "ORD-1002",
-            date: "2024-02-10",
-            total: 149.50,
-            status: "Shipped",
-            items: 2,
-            products: ["Smart Watch", "Watch Band"],
-          },
-          {
-            id: "ORD-1003",
-            date: "2024-02-05",
-            total: 79.99,
-            status: "Processing",
-            items: 1,
-            products: ["Bluetooth Speaker"],
-          },
-          {
-            id: "ORD-1004",
-            date: "2024-01-28",
-            total: 459.97,
-            status: "Delivered",
-            items: 3,
-            products: ["Laptop Backpack", "Wireless Mouse", "USB-C Hub"],
-          },
-        ];
+        // Filter orders that belong to the logged-in user
+        // Match by phone number OR email (whichever the order recorded)
+        const userPhone = parsedUser.phonenumber || parsedUser.phone || "";
+        const userEmail = parsedUser.email || "";
 
-        setRecentOrders(mockOrders);
-
-        const totalSpent = mockOrders.reduce((sum, o) => sum + o.total, 0);
-        const pendingOrders = mockOrders.filter(
-          (o) => o.status === "Processing" || o.status === "Shipped"
-        ).length;
-        const totalItems = mockOrders.reduce((sum, o) => sum + o.items, 0);
-
-        setStats({
-          totalOrders: mockOrders.length,
-          totalSpent,
-          wishlistCount: 8,
-          pendingOrders,
-          totalItems,
+        const myOrders = ordersRes.data.filter((order) => {
+          const phoneMatch = userPhone && order.cust_phone === userPhone;
+          const emailMatch = userEmail && order.cust_email === userEmail;
+          return phoneMatch || emailMatch;
         });
+
+        setOrders(myOrders);
       } catch (err) {
         console.error("Error fetching data:", err);
         setError("Failed to load some data. Please refresh the page.");
@@ -164,31 +191,22 @@ export default function UserDashboard() {
       }
     };
 
-    fetchDashboardData();
+    fetchData();
   }, [navigate]);
 
+  // ─── Cart helpers ───────────────────────────────────────────────────────────
   const addToCart = (product) => {
-    const productWithNumberPrice = {
-      ...product,
-      price: parseFloat(product.price) || 0,
-      quantity: 1,
-    };
-
-    setCart((prevCart) => {
-      const existing = prevCart.find((item) => item.id === product.id);
-      if (existing) {
-        return prevCart.map((item) =>
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
-        );
-      }
-      return [...prevCart, productWithNumberPrice];
+    const item = { ...product, price: parseFloat(product.price) || 0, quantity: 1 };
+    setCart((prev) => {
+      const existing = prev.find((i) => i.id === product.id);
+      if (existing) return prev.map((i) => i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i);
+      return [...prev, item];
     });
-
     showNotification(`✅ ${product.name} added to cart!`);
   };
 
   const removeFromCart = (productId) => {
-    setCart((prevCart) => prevCart.filter((item) => item.id !== productId));
+    setCart((prev) => prev.filter((i) => i.id !== productId));
     showNotification("Item removed from cart", "info");
   };
 
@@ -201,50 +219,47 @@ export default function UserDashboard() {
   };
 
   const showNotification = (message, type = "success") => {
-    const notification = document.createElement("div");
-    notification.className = `notification ${type}`;
-    notification.textContent = message;
-    document.body.appendChild(notification);
-    setTimeout(() => notification.classList.add("show"), 100);
+    const el = document.createElement("div");
+    el.className = `notification ${type}`;
+    el.textContent = message;
+    document.body.appendChild(el);
+    setTimeout(() => el.classList.add("show"), 100);
     setTimeout(() => {
-      notification.classList.remove("show");
-      setTimeout(() => document.body.removeChild(notification), 300);
+      el.classList.remove("show");
+      setTimeout(() => document.body.removeChild(el), 300);
     }, 3000);
   };
 
-  // ✅ Logout: clear user, go to home
   const handleLogout = () => {
     localStorage.removeItem("user");
-    navigate("/");
+    window.location.href = "/";
   };
 
-  const getStatusColor = (status) => {
+  const getStatusColor = (status = "") => {
     switch (status.toLowerCase()) {
       case "delivered": return { bg: "#d1fae5", text: "#059669" };
-      case "shipped": return { bg: "#dbeafe", text: "#3b82f6" };
-      case "processing": return { bg: "#fed7aa", text: "#d97706" };
-      default: return { bg: "#e2e8f0", text: "#64748b" };
+      case "paid":      return { bg: "#fef3c7", text: "#92400e" };
+      case "shipped":   return { bg: "#dbeafe", text: "#3b82f6" };
+      default:          return { bg: "#fee2e2", text: "#991b1b" };
     }
   };
 
-  const totalItemsInCart = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const cartTotal = cart
-    .reduce((sum, item) => sum + item.price * item.quantity, 0)
-    .toFixed(2);
+  const totalItemsInCart = cart.reduce((s, i) => s + i.quantity, 0);
+  const cartTotal = cart.reduce((s, i) => s + i.price * i.quantity, 0).toFixed(2);
 
   const filteredAndSortedProducts = products
     .filter(
-      (product) =>
-        product.name?.toLowerCase().includes(search.toLowerCase()) ||
-        product.description?.toLowerCase().includes(search.toLowerCase())
+      (p) =>
+        p.name?.toLowerCase().includes(search.toLowerCase()) ||
+        p.description?.toLowerCase().includes(search.toLowerCase())
     )
     .sort((a, b) => {
       switch (sortBy) {
-        case "price-low": return a.price - b.price;
+        case "price-low":  return a.price - b.price;
         case "price-high": return b.price - a.price;
-        case "name": return a.name?.localeCompare(b.name);
-        case "stock": return b.stock - a.stock;
-        default: return 0;
+        case "name":       return a.name?.localeCompare(b.name);
+        case "stock":      return b.stock - a.stock;
+        default:           return 0;
       }
     });
 
@@ -274,21 +289,12 @@ export default function UserDashboard() {
               </div>
               <div className="cart-info">
                 <span className="cart-icon">🛒</span>
-                <span className="cart-count">
-                  {totalItemsInCart} item{totalItemsInCart !== 1 ? "s" : ""}
-                </span>
+                <span className="cart-count">{totalItemsInCart} item{totalItemsInCart !== 1 ? "s" : ""}</span>
                 <span className="cart-total">Total: ${cartTotal}</span>
               </div>
               <div className="cart-actions">
-                <button
-                  className="view-cart-btn"
-                  onClick={() => navigate("/checkout", { state: { cart, user } })}
-                >
-                  Checkout Now
-                </button>
-                <button className="clear-cart-btn" onClick={clearCart}>
-                  Clear Cart
-                </button>
+                <button className="view-cart-btn" onClick={() => navigate("/checkout", { state: { cart, user } })}>Checkout Now</button>
+                <button className="clear-cart-btn" onClick={clearCart}>Clear Cart</button>
               </div>
             </div>
           </div>
@@ -297,53 +303,34 @@ export default function UserDashboard() {
         {/* Navigation Bar */}
         <nav className="dashboard-nav" style={{ top: totalItemsInCart > 0 ? "70px" : "0" }}>
           <div className="nav-links">
-            <Link to="/" className="nav-link">Home</Link>
+            {/* <Link to="/" className="nav-link">Home</Link> */}
             <Link to="/userdashboard" className="nav-link active">Dashboard</Link>
             <Link to="/myorders" className="nav-link">My Orders</Link>
           </div>
-
           <div className="nav-user">
             <div className="user-dropdown">
               <div className="user-info">
                 <span className="user-greeting">
-                  Hello,{" "}
-                  {user?.fullname?.split(" ")[0] ||
-                    user?.name?.split(" ")[0] ||
-                    user?.email?.split("@")[0] ||
-                    "User"}
+                  Hello, {user?.fullname?.split(" ")[0] || user?.name?.split(" ")[0] || user?.email?.split("@")[0] || "User"}
                 </span>
                 <div className="user-avatar">
-                  {user?.fullname?.charAt(0)?.toUpperCase() ||
-                    user?.name?.charAt(0)?.toUpperCase() ||
-                    user?.email?.charAt(0)?.toUpperCase() ||
-                    "U"}
+                  {user?.fullname?.charAt(0)?.toUpperCase() || user?.name?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || "U"}
                 </div>
               </div>
               <div className="dropdown-menu">
                 <Link to="/profile" className="dropdown-item">Profile Settings</Link>
                 <Link to="/wishlist" className="dropdown-item">Wishlist</Link>
                 <div className="dropdown-divider"></div>
-                <button onClick={handleLogout} className="dropdown-item logout">
-                  Sign Out
-                </button>
+                <button onClick={handleLogout} className="dropdown-item logout">Sign Out</button>
               </div>
             </div>
           </div>
         </nav>
 
         {/* Welcome Banner */}
-        <div
-          className="welcome-banner"
-          style={{ marginTop: totalItemsInCart > 0 ? "140px" : "2rem" }}
-        >
+        <div className="welcome-banner" style={{ marginTop: totalItemsInCart > 0 ? "140px" : "2rem" }}>
           <div className="welcome-content">
-            <h1>
-              Welcome back,{" "}
-              {user?.fullname ||
-                user?.name ||
-                user?.email?.split("@")[0] ||
-                "Valued Customer"}! 👋
-            </h1>
+            <h1>Welcome back, {user?.fullname || user?.name || user?.email?.split("@")[0] || "Valued Customer"}! 👋</h1>
             <p>Track your orders, manage your account, and discover new products</p>
           </div>
           <div className="banner-stats">
@@ -357,39 +344,36 @@ export default function UserDashboard() {
             </div>
             <div className="banner-stat">
               <span className="stat-value">{stats.pendingOrders}</span>
-              <span className="stat-label">In Transit</span>
+              <span className="stat-label">Pending</span>
             </div>
           </div>
         </div>
 
         {/* Tabs */}
         <div className="dashboard-tabs">
-          {["overview", "shop", "recent", "activity"].map((tab) => (
+          {["overview", "shop", "my-orders", "activity"].map((tab) => (
             <button
               key={tab}
               className={`tab-btn ${activeTab === tab ? "active" : ""}`}
               onClick={() => setActiveTab(tab)}
             >
-              {tab === "overview" ? "Overview" :
-               tab === "shop" ? "Shop Products" :
-               tab === "recent" ? "Recent Orders" : "Activity"}
+              {tab === "overview" ? "Overview" : tab === "shop" ? "Shop Products" : tab === "my-orders" ? `My Orders (${groupedOrders.length})` : "Activity"}
             </button>
           ))}
         </div>
 
         {/* Tab Content */}
         <div className="tab-content">
+
           {/* ── OVERVIEW ── */}
           {activeTab === "overview" && (
             <div className="overview-tab">
               <div className="stats-grid">
                 {[
-                  { icon: "📦", value: stats.totalOrders, label: "Total Orders" },
+                  { icon: "📦", value: stats.totalOrders,              label: "Total Orders" },
                   { icon: "💰", value: `$${stats.totalSpent.toFixed(2)}`, label: "Total Spent" },
-                  { icon: "❤️", value: stats.wishlistCount, label: "Wishlist" },
-                  { icon: "⏳", value: stats.pendingOrders, label: "Pending Orders" },
-                  { icon: "📊", value: stats.totalItems, label: "Items Purchased" },
-                  { icon: "⭐", value: "4.8", label: "Avg Rating" },
+                  { icon: "⏳", value: stats.pendingOrders,             label: "Pending Orders" },
+                  { icon: "📊", value: stats.totalItems,                label: "Items Purchased" },
                 ].map((s, i) => (
                   <div key={i} className="stat-card">
                     <div className="stat-icon">{s.icon}</div>
@@ -408,7 +392,7 @@ export default function UserDashboard() {
                     <span className="action-icon">🛒</span>
                     <span className="action-text">Continue Shopping</span>
                   </button>
-                  <button onClick={() => setActiveTab("recent")} className="action-card">
+                  <button onClick={() => setActiveTab("my-orders")} className="action-card">
                     <span className="action-icon">📋</span>
                     <span className="action-text">Track Orders</span>
                   </button>
@@ -422,6 +406,39 @@ export default function UserDashboard() {
                   </Link>
                 </div>
               </div>
+
+              {/* Mini order preview */}
+              {groupedOrders.length > 0 && (
+                <div className="recent-orders-preview">
+                  <div className="preview-header">
+                    <h2>Recent Orders</h2>
+                    <button className="view-all-btn" onClick={() => setActiveTab("/myorders")}>
+                       →</button>
+                  </div>
+                  {groupedOrders.slice(0, 3).map((order) => {
+                    const colors = getStatusColor(order.status);
+
+                    return (
+                      <div key={order.id} className="mini-order-card">
+                        <div className="mini-order-left">
+                          <span className="mini-order-date">
+                            {order.created_at ? new Date(order.created_at).toLocaleDateString() : "N/A"}
+                          </span>
+                          <span className="mini-order-items">
+                            {order.items.map((i) => i.productName).join(", ")}
+                          </span>
+                        </div>
+                        <div className="mini-order-right">
+                          <span className="mini-order-total">${order.totalAmount.toFixed(2)}</span>
+                          <span className="mini-status-badge" style={{ background: colors.bg, color: colors.text }}>
+                            {order.status || "Pending"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -446,7 +463,7 @@ export default function UserDashboard() {
                 <div className="hero-stats">
                   <div className="stat"><span className="stat-number">{products.length}</span><span className="stat-label">Products</span></div>
                   <div className="stat"><span className="stat-number">{products.filter((p) => p.stock > 0).length}</span><span className="stat-label">In Stock</span></div>
-                  <div className="stat"><span className="stat-number">{totalItemsInCart}</span><span className="stat-label">In Your Cart</span></div>
+                  <div className="stat"><span className="stat-number">{totalItemsInCart}</span><span className="stat-label">In Cart</span></div>
                 </div>
               </section>
 
@@ -492,7 +509,6 @@ export default function UserDashboard() {
                           {p.stock <= 0 ? <div className="out-of-stock-badge">Out of Stock</div> : p.stock < 10 ? <div className="low-stock-badge">Low Stock</div> : null}
                           {isInCart && <div className="in-cart-badge">In Cart: {cartQuantity}</div>}
                         </div>
-
                         <div className="product-content">
                           <div className="product-header">
                             <h3 className="product-name">{p.name || "Unnamed Product"}</h3>
@@ -519,9 +535,7 @@ export default function UserDashboard() {
                               </Link>
                             </div>
                             {isInCart && (
-                              <button className="remove-from-cart-btn" onClick={() => removeFromCart(p.id)}>
-                                Remove from Cart
-                              </button>
+                              <button className="remove-from-cart-btn" onClick={() => removeFromCart(p.id)}>Remove from Cart</button>
                             )}
                           </div>
                         </div>
@@ -545,63 +559,74 @@ export default function UserDashboard() {
                   </div>
                 </div>
               )}
-
-              {!loading && products.length > 0 && (
-                <div className="featured-banner">
-                  <div className="banner-content">
-                    <h3>🔥 Hot Deal of the Day</h3>
-                    <p>Check out our featured product with special pricing</p>
-                    <div className="featured-buttons">
-                      <button className="featured-add-to-cart" onClick={() => addToCart(products[0])}>Add to Cart</button>
-                      <Link to={`/order/${products[0].id}`} state={{ product: products[0], user }}>
-                        <button className="featured-button">Buy Now</button>
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
-          {/* ── RECENT ORDERS ── */}
-          {activeTab === "recent" && (
-            <div className="recent-tab">
-              <h2>Recent Orders</h2>
-              <div className="orders-list-full">
-                {recentOrders.map((order) => {
-                  const statusColors = getStatusColor(order.status);
-                  return (
-                    <div key={order.id} className="order-card">
-                      <div className="order-header">
-                        <div>
-                          <span className="order-id">{order.id}</span>
-                          <span className="order-date">{new Date(order.date).toLocaleDateString()}</span>
+          {/* ── MY ORDERS (real backend data) ── */}
+          {activeTab === "my-orders" && (
+            <div className="my-orders-tab">
+              <h2>All Orders</h2>
+
+              {groupedOrders.length === 0 ? (
+                <div className="empty-orders">
+                  <span className="empty-icon">📋</span>
+                  <h3>No orders yet</h3>
+                  <p>Your order history will appear here once you place an order.</p>
+                  <button className="shop-now-btn" onClick={() => setActiveTab("shop")}>Start Shopping →</button>
+                </div>
+              ) : (
+                <div className="orders-list-full">
+                  {groupedOrders.map((orderGroup) => {
+                    const colors = getStatusColor(orderGroup.status);
+                    return (
+                      <div key={orderGroup.id} className="order-card">
+                        {/* Order Header */}
+                        <div className="order-header">
+                          <div>
+                            <span className="order-id">Order #{orderGroup.id}</span>
+                            <span className="order-date">
+                              {orderGroup.created_at
+                                ? new Date(orderGroup.created_at).toLocaleDateString("en-US", {
+                                    year: "numeric", month: "short", day: "numeric",
+                                  })
+                                : "N/A"}
+                            </span>
+                          </div>
+                          <span className="order-status" style={{ background: colors.bg, color: colors.text }}>
+                            {orderGroup.status || "Pending"}
+                          </span>
                         </div>
-                        <span className="order-status" style={{ backgroundColor: statusColors.bg, color: statusColors.text }}>
-                          {order.status}
-                        </span>
-                      </div>
-                      <div className="order-body">
-                        <div className="order-products">
-                          {order.products.map((product, i) => (
-                            <span key={i} className="product-tag">{product}</span>
+
+                        {/* Order Items */}
+                        <div className="order-items-section">
+                          {orderGroup.items.map((item) => (
+                            <div key={item.id} className="order-item-row">
+                              <div className="order-item-info">
+                                <span className="order-item-name">{item.productName}</span>
+                                <span className="order-item-qty">Qty: {item.qty}</span>
+                              </div>
+                              <div className="order-item-pricing">
+                                <span className="order-item-unit">${item.price.toFixed(2)} each</span>
+                                <span className="order-item-subtotal">${item.subtotal.toFixed(2)}</span>
+                              </div>
+                            </div>
                           ))}
                         </div>
-                        <div className="order-total">
-                          <span>Total:</span>
-                          <strong>${order.total.toFixed(2)}</strong>
+
+                        {/* Order Footer */}
+                        <div className="order-footer">
+                          <div className="order-meta">
+                            <span className="order-location">📍 {orderGroup.location || "N/A"}</span>
+                            <span className="order-total-line">
+                              Total: <strong>${orderGroup.totalAmount.toFixed(2)}</strong>
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <div className="order-footer">
-                        <button className="order-action">Track Package</button>
-                        <button className="order-action">Buy Again</button>
-                        <button className="order-action review">Write Review</button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              <Link to="/myorders" className="view-all-orders">View All Orders →</Link>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -610,20 +635,24 @@ export default function UserDashboard() {
             <div className="activity-tab">
               <h2>Recent Activity</h2>
               <div className="activity-timeline">
-                {[
-                  { icon: "🛒", text: <>You ordered <strong>Wireless Headphones</strong></>, time: "2 hours ago" },
-                  { icon: "❤️", text: <>Added <strong>Smart Watch</strong> to wishlist</>, time: "Yesterday" },
-                  { icon: "📦", text: <>Your order <strong>#ORD-1002</strong> has been shipped</>, time: "2 days ago" },
-                  { icon: "⭐", text: <>You reviewed <strong>Bluetooth Speaker</strong></>, time: "3 days ago" },
-                ].map((item, i) => (
+                {groupedOrders.slice(0, 5).map((order, i) => (
                   <div key={i} className="activity-item">
-                    <div className="activity-icon">{item.icon}</div>
+                    <div className="activity-icon">
+                      {order.status === "Delivered" ? "✅" : order.status === "Paid" ? "💳" : "⏳"}
+                    </div>
                     <div className="activity-content">
-                      <p>{item.text}</p>
-                      <span className="activity-time">{item.time}</span>
+                      <p>
+                        Order of <strong>{order.items.map((i) => i.productName).join(", ")}</strong> — {order.status || "Pending"}
+                      </p>
+                      <span className="activity-time">
+                        {order.created_at ? new Date(order.created_at).toLocaleDateString() : ""}
+                      </span>
                     </div>
                   </div>
                 ))}
+                {groupedOrders.length === 0 && (
+                  <p style={{ color: "#64748b", textAlign: "center", padding: "2rem" }}>No activity yet.</p>
+                )}
               </div>
             </div>
           )}
@@ -671,17 +700,13 @@ export default function UserDashboard() {
         .cart-info { flex: 1; display: flex; align-items: center; gap: 1rem; justify-content: center; }
         .cart-actions { flex: 0 0 auto; display: flex; gap: 0.5rem; }
         .my-account-link { display: flex; align-items: center; gap: 0.5rem; text-decoration: none; color: #1e293b; font-weight: 600; padding: 0.5rem 1rem; border-radius: 8px; background: #f1f5f9; transition: all 0.2s ease; }
-        .my-account-link:hover { background: #e2e8f0; }
         .my-account-link.active { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; }
-        .account-icon { font-size: 1.2rem; }
-        .account-text { font-size: 0.95rem; }
         .cart-icon { font-size: 1.5rem; }
         .cart-count { font-weight: 600; color: #1e293b; }
         .cart-total { font-weight: 600; color: #059669; }
-        .view-cart-btn { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+        .view-cart-btn { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
         .view-cart-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
         .clear-cart-btn { background: #fee2e2; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
-        .clear-cart-btn:hover { background: #fecaca; }
         .dashboard-nav { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 20px rgba(0,0,0,0.1); position: sticky; z-index: 999; }
         .nav-links { display: flex; gap: 2rem; align-items: center; }
         .nav-link { text-decoration: none; color: #64748b; font-weight: 600; padding: 0.5rem 1rem; border-radius: 8px; transition: all 0.2s ease; }
@@ -706,7 +731,7 @@ export default function UserDashboard() {
         .banner-stat { text-align: center; }
         .banner-stat .stat-value { font-size: 1.5rem; font-weight: 700; display: block; }
         .banner-stat .stat-label { font-size: 0.875rem; opacity: 0.9; }
-        .dashboard-tabs { display: flex; gap: 1rem; padding: 0 2rem; margin-bottom: 2rem; }
+        .dashboard-tabs { display: flex; gap: 1rem; padding: 0 2rem; margin-bottom: 2rem; flex-wrap: wrap; }
         .tab-btn { padding: 0.75rem 1.5rem; background: white; border: none; border-radius: 50px; font-weight: 600; color: #64748b; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
         .tab-btn:hover { color: #3b82f6; transform: translateY(-2px); }
         .tab-btn.active { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; }
@@ -718,29 +743,70 @@ export default function UserDashboard() {
         .stat-details { display: flex; flex-direction: column; }
         .stat-value { font-size: 1.8rem; font-weight: 700; color: #1e293b; line-height: 1.2; }
         .stat-label { color: #64748b; font-size: 0.875rem; }
-        .quick-actions-section { background: white; border-radius: 16px; padding: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        .quick-actions-section { background: white; border-radius: 16px; padding: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin-bottom: 2rem; }
         .quick-actions-section h2 { color: #1e293b; margin-bottom: 1.5rem; }
         .actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
         .action-card { background: #f8fafc; padding: 1.5rem; border-radius: 12px; text-decoration: none; color: inherit; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; transition: all 0.2s ease; cursor: pointer; border: none; width: 100%; font-size: 1rem; }
         .action-card:hover { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; transform: translateY(-4px); }
         .action-icon { font-size: 2rem; }
         .action-text { font-size: 0.875rem; font-weight: 600; text-align: center; }
-        .hero-section { background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); border-radius: 20px; padding: 3rem 2rem; margin-bottom: 2rem; color: white; text-align: center; position: relative; overflow: hidden; }
-        .hero-content { position: relative; z-index: 1; max-width: 800px; margin: 0 auto; }
-        .hero-title { font-size: 3rem; font-weight: 800; margin-bottom: 1rem; background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+        /* Recent orders preview on overview */
+        .recent-orders-preview { background: white; border-radius: 16px; padding: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        .preview-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .preview-header h2 { margin: 0; color: #1e293b; }
+        .view-all-btn { background: none; border: none; color: #3b82f6; font-weight: 600; cursor: pointer; font-size: 0.95rem; }
+        .mini-order-card { display: flex; justify-content: space-between; align-items: center; padding: 0.875rem; background: #f8fafc; border-radius: 10px; margin-bottom: 0.75rem; border: 1px solid #e2e8f0; }
+        .mini-order-left { display: flex; flex-direction: column; gap: 0.25rem; }
+        .mini-order-date { font-size: 0.75rem; color: #64748b; }
+        .mini-order-items { font-size: 0.9rem; font-weight: 600; color: #1e293b; }
+        .mini-order-right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.375rem; }
+        .mini-order-total { font-weight: 700; color: #059669; }
+        .mini-status-badge { padding: 0.2rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 700; }
+
+        /* My Orders tab */
+        .my-orders-tab h2 { color: #1e293b; margin-bottom: 1.5rem; }
+        .empty-orders { text-align: center; padding: 4rem 2rem; background: white; border-radius: 16px; border: 2px dashed #e2e8f0; }
+        .empty-orders .empty-icon { font-size: 4rem; display: block; margin-bottom: 1rem; }
+        .empty-orders h3 { color: #1e293b; margin-bottom: 0.5rem; }
+        .empty-orders p { color: #64748b; margin-bottom: 1.5rem; }
+        .shop-now-btn { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 0.75rem 2rem; border-radius: 50px; font-weight: 600; font-size: 1rem; cursor: pointer; }
+        .orders-list-full { display: grid; gap: 1.25rem; }
+        .order-card { background: white; border-radius: 14px; padding: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }
+        .order-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #f1f5f9; }
+        .order-id { font-weight: 700; color: #1e293b; margin-right: 1rem; }
+        .order-date { color: #64748b; font-size: 0.875rem; }
+        .order-status { padding: 0.3rem 0.875rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+        .order-items-section { background: #f8fafc; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+        .order-item-row { display: flex; justify-content: space-between; align-items: center; padding: 0.625rem; background: white; border-radius: 8px; margin-bottom: 0.5rem; border: 1px solid #e2e8f0; }
+        .order-item-row:last-child { margin-bottom: 0; }
+        .order-item-info { display: flex; flex-direction: column; gap: 0.2rem; }
+        .order-item-name { font-weight: 600; color: #1e293b; }
+        .order-item-qty { font-size: 0.8rem; color: #64748b; }
+        .order-item-pricing { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; }
+        .order-item-unit { font-size: 0.8rem; color: #94a3b8; }
+        .order-item-subtotal { font-weight: 700; color: #059669; }
+        .order-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 0.75rem; border-top: 1px solid #f1f5f9; flex-wrap: wrap; gap: 0.5rem; }
+        .order-meta { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }
+        .order-location { font-size: 0.875rem; color: #64748b; }
+        .order-total-line { font-size: 1rem; color: #475569; }
+        .order-total-line strong { color: #1e293b; font-size: 1.2rem; margin-left: 0.25rem; }
+
+        /* Shop */
+        .hero-section { background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); border-radius: 20px; padding: 3rem 2rem; margin-bottom: 2rem; color: white; text-align: center; }
+        .hero-title { font-size: 3rem; font-weight: 800; margin-bottom: 1rem; -webkit-background-clip: text; }
         .hero-subtitle { font-size: 1.25rem; opacity: 0.9; margin-bottom: 2rem; }
         .hero-search { position: relative; max-width: 500px; margin: 0 auto; }
         .search-input { width: 100%; padding: 1rem 1.5rem 1rem 3rem; border: none; border-radius: 50px; font-size: 1rem; background: rgba(255,255,255,0.9); box-shadow: 0 10px 40px rgba(0,0,0,0.1); transition: all 0.3s ease; }
         .search-input:focus { outline: none; background: white; }
         .search-icon { position: absolute; left: 1.5rem; top: 50%; transform: translateY(-50%); color: #64748b; pointer-events: none; }
-        .hero-stats { display: flex; justify-content: center; gap: 3rem; margin-top: 2rem; position: relative; z-index: 1; }
+        .hero-stats { display: flex; justify-content: center; gap: 3rem; margin-top: 2rem; }
         .stat { display: flex; flex-direction: column; align-items: center; }
         .stat-number { font-size: 2.5rem; font-weight: 800; margin-bottom: 0.25rem; }
         .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding: 1rem; background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
         .sort-control { display: flex; align-items: center; gap: 0.75rem; }
         .sort-control label { font-weight: 600; color: #475569; }
-        .sort-select { padding: 0.5rem 2rem 0.5rem 1rem; border: 2px solid #e2e8f0; border-radius: 8px; background: white; font-size: 0.875rem; cursor: pointer; appearance: none; }
-        .sort-select:focus { outline: none; border-color: #3b82f6; }
+        .sort-select { padding: 0.5rem 2rem 0.5rem 1rem; border: 2px solid #e2e8f0; border-radius: 8px; background: white; font-size: 0.875rem; cursor: pointer; }
         .results-count { color: #64748b; font-size: 0.875rem; }
         .error-message { background: #fee2e2; color: #dc2626; padding: 1rem 1.5rem; border-radius: 8px; margin-bottom: 2rem; display: flex; align-items: center; gap: 0.75rem; }
         .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 3rem; }
@@ -766,11 +832,10 @@ export default function UserDashboard() {
         .button-group { display: flex; gap: 0.5rem; }
         .add-to-cart-button { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: all 0.2s ease; flex: 2; justify-content: center; }
         .add-to-cart-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
-        .buy-now-button { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: all 0.2s ease; flex: 1; justify-content: center; text-decoration: none; }
+        .buy-now-button { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: all 0.2s ease; flex: 1; justify-content: center; }
         .buy-now-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
         .add-to-cart-button:disabled, .buy-now-button:disabled { background: #94a3b8; cursor: not-allowed; opacity: 0.7; }
         .remove-from-cart-btn { background: #fee2e2; color: #dc2626; border: none; padding: 0.5rem; border-radius: 6px; font-size: 0.875rem; font-weight: 600; cursor: pointer; }
-        .remove-from-cart-btn:hover { background: #fecaca; }
         .empty-state { grid-column: 1 / -1; text-align: center; padding: 4rem 2rem; background: white; border-radius: 16px; border: 2px dashed #e2e8f0; }
         .empty-icon { font-size: 4rem; margin-bottom: 1rem; opacity: 0.5; }
         .cart-summary-banner { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border-radius: 16px; padding: 1.5rem 2rem; color: white; margin-top: 2rem; }
@@ -778,40 +843,19 @@ export default function UserDashboard() {
         .cart-summary-text h3 { font-size: 1.3rem; font-weight: 700; margin-bottom: 0.25rem; }
         .cart-summary-text p { opacity: 0.9; }
         .cart-total-summary { font-size: 1.2rem; }
-        .checkout-now-btn { background: white; color: #d97706; border: none; padding: 1rem 2rem; border-radius: 50px; font-size: 1rem; font-weight: 700; cursor: pointer; transition: all 0.3s ease; white-space: nowrap; }
-        .checkout-now-btn:hover { transform: translateY(-2px); }
-        .featured-banner { background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); border-radius: 16px; padding: 2rem; color: white; text-align: center; position: relative; overflow: hidden; margin-top: 2rem; }
-        .featured-banner .banner-content { position: relative; z-index: 1; }
-        .featured-banner h3 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; }
-        .featured-banner p { opacity: 0.9; margin-bottom: 1.5rem; }
-        .featured-buttons { display: flex; gap: 1rem; justify-content: center; }
-        .featured-add-to-cart { background: #f59e0b; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 50px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
-        .featured-add-to-cart:hover { background: #d97706; transform: translateY(-2px); }
-        .featured-button { background: white; color: #7c3aed; border: none; padding: 0.75rem 2rem; border-radius: 50px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
-        .featured-button:hover { transform: translateY(-2px); }
-        .orders-list-full { display: grid; gap: 1rem; }
-        .order-card { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
-        .order-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-        .order-id { font-weight: 700; color: #1e293b; margin-right: 1rem; }
-        .order-date { color: #64748b; font-size: 0.875rem; }
-        .order-status { padding: 0.25rem 1rem; border-radius: 50px; font-size: 0.875rem; font-weight: 600; }
-        .order-body { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-        .order-products { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-        .product-tag { background: #f1f5f9; padding: 0.25rem 0.75rem; border-radius: 50px; font-size: 0.875rem; color: #475569; }
-        .order-total { font-size: 1.1rem; }
-        .order-total strong { color: #059669; margin-left: 0.5rem; }
-        .order-footer { display: flex; gap: 1rem; border-top: 1px solid #e2e8f0; padding-top: 1rem; }
-        .order-action { padding: 0.5rem 1rem; background: #f1f5f9; border: none; border-radius: 6px; font-weight: 600; color: #475569; cursor: pointer; transition: all 0.2s ease; }
-        .order-action:hover { background: #3b82f6; color: white; }
-        .order-action.review { background: #f59e0b; color: white; }
-        .view-all-orders { display: inline-block; margin-top: 1rem; color: #3b82f6; text-decoration: none; font-weight: 600; }
+        .checkout-now-btn { background: white; color: #d97706; border: none; padding: 1rem 2rem; border-radius: 50px; font-size: 1rem; font-weight: 700; cursor: pointer; }
+
+        /* Activity */
+        .activity-tab h2 { color: #1e293b; margin-bottom: 1.5rem; }
         .activity-timeline { background: white; border-radius: 16px; padding: 1.5rem; }
         .activity-item { display: flex; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid #e2e8f0; }
         .activity-item:last-child { border-bottom: none; }
-        .activity-icon { width: 40px; height: 40px; background: #f1f5f9; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
+        .activity-icon { width: 40px; height: 40px; background: #f1f5f9; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
         .activity-content { flex: 1; }
         .activity-content p { margin-bottom: 0.25rem; color: #1e293b; }
         .activity-time { font-size: 0.875rem; color: #64748b; }
+
+        /* Account Info */
         .account-info-section { padding: 2rem; background: rgba(255,255,255,0.9); margin-top: 2rem; }
         .account-info-section h2 { color: #1e293b; margin-bottom: 1.5rem; }
         .info-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
@@ -819,33 +863,35 @@ export default function UserDashboard() {
         .info-card h3 { color: #1e293b; margin-bottom: 1rem; font-size: 1.1rem; }
         .info-content p { margin-bottom: 0.5rem; color: #64748b; }
         .info-content p span { font-weight: 600; color: #1e293b; }
-        .edit-info-btn { margin-top: 1rem; padding: 0.5rem 1rem; background: #f1f5f9; border: none; border-radius: 6px; color: #3b82f6; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+        .edit-info-btn { margin-top: 1rem; padding: 0.5rem 1rem; background: #f1f5f9; border: none; border-radius: 6px; color: #3b82f6; font-weight: 600; cursor: pointer; }
         .edit-info-btn:hover { background: #3b82f6; color: white; }
+
+        /* Notification */
         .notification { position: fixed; top: 2rem; right: 2rem; padding: 1rem 2rem; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); font-weight: 600; z-index: 2000; opacity: 0; transform: translateX(100%); transition: all 0.3s ease; }
         .notification.show { opacity: 1; transform: translateX(0); }
         .notification.success { border-left: 4px solid #10b981; color: #059669; }
         .notification.info { border-left: 4px solid #3b82f6; color: #2563eb; }
+
+        /* Loading */
         .dashboard-loading { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; }
         .loading-spinner { width: 50px; height: 50px; border: 4px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
+
         @media (max-width: 768px) {
           .cart-indicator-content { flex-wrap: wrap; flex-direction: column; align-items: stretch; }
-          .cart-info { flex-direction: column; align-items: center; }
-          .cart-actions { justify-content: center; }
           .dashboard-nav { flex-direction: column; gap: 1rem; padding: 1rem; }
           .nav-links { width: 100%; justify-content: center; flex-wrap: wrap; }
           .welcome-banner { margin: 1rem; padding: 1.5rem; flex-direction: column; text-align: center; }
           .banner-stats { width: 100%; justify-content: center; }
-          .dashboard-tabs { flex-wrap: wrap; justify-content: center; }
-          .stats-grid { grid-template-columns: 1fr; }
           .hero-title { font-size: 2rem; }
           .hero-stats { flex-direction: column; gap: 1.5rem; }
           .controls { flex-direction: column; gap: 1rem; }
           .product-grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
           .button-group { flex-direction: column; }
           .cart-summary-banner .banner-content { flex-direction: column; text-align: center; }
-          .order-header, .order-body, .order-footer { flex-direction: column; }
+          .order-footer { flex-direction: column; }
           .info-cards { grid-template-columns: 1fr; }
+          .mini-order-card { flex-direction: column; gap: 0.5rem; }
         }
         @media (max-width: 480px) {
           .product-grid { grid-template-columns: 1fr; }

@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ onLogout }) {
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [newItem, setNewItem] = useState({ name: "", price: "", stock: "", imageFile: null });
@@ -12,15 +14,25 @@ export default function AdminDashboard() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // ✅ Logout handler
+  const handleLogout = () => {
+    if (!window.confirm("Are you sure you want to logout?")) return;
+    // 1. Clear localStorage
+    localStorage.removeItem("authUser");
+    localStorage.removeItem("rememberedEmail");
+    // 2. Sync App state (clears authUser in App so /login won't redirect back to /admin)
+    if (onLogout) onLogout();
+    // 3. Navigate to login
+    navigate("/login", { replace: true });
+  };
+
   // Enrich orders with product information and calculate totals
   const enrichedOrders = useMemo(() => {
     return orders.map(order => {
-      // Find the product for this order
       const product = products.find(p => p.id === order.product_id);
       const productPrice = product ? parseFloat(product.price) : 0;
       const quantity = parseInt(order.qty) || 1;
       const total = productPrice * quantity;
-      
       return {
         ...order,
         productName: product ? product.name : `Product #${order.product_id}`,
@@ -30,21 +42,16 @@ export default function AdminDashboard() {
     });
   }, [orders, products]);
 
-  // Group orders by customer and location (orders placed together)
+  // Group orders by customer and location
   const groupedOrders = useMemo(() => {
-    // Create a map to group orders by customer phone + location + approximate time
     const orderGroups = {};
-    
     enrichedOrders.forEach(order => {
-      // Create a unique key for orders that should be grouped together
-      // Group by: customer phone, location, and orders within 1 minute of each other
       const orderTime = new Date(order.created_at || order.date || Date.now());
-      const timeKey = Math.floor(orderTime.getTime() / (60 * 1000)); // Group by minute
+      const timeKey = Math.floor(orderTime.getTime() / (60 * 1000));
       const groupKey = `${order.cust_phone}_${order.location}_${timeKey}`;
-      
       if (!orderGroups[groupKey]) {
         orderGroups[groupKey] = {
-          id: order.id, // Use first order's ID as group ID
+          id: order.id,
           cust_name: order.cust_name,
           cust_phone: order.cust_phone,
           cust_email: order.cust_email,
@@ -52,11 +59,9 @@ export default function AdminDashboard() {
           status: order.status,
           created_at: order.created_at || order.date,
           items: [],
-          orderIds: [] // Track all order IDs in this group
+          orderIds: []
         };
       }
-      
-      // Add this order's item to the group
       orderGroups[groupKey].items.push({
         id: order.id,
         productName: order.productName,
@@ -64,11 +69,7 @@ export default function AdminDashboard() {
         price: order.productPrice,
         subtotal: order.total
       });
-      
       orderGroups[groupKey].orderIds.push(order.id);
-      
-      // Update status to the "latest" status in the group
-      // Priority: Delivered > Paid > Pending
       const statusPriority = { 'Delivered': 3, 'Paid': 2, 'Pending': 1 };
       const currentPriority = statusPriority[orderGroups[groupKey].status] || 0;
       const newPriority = statusPriority[order.status] || 0;
@@ -76,8 +77,6 @@ export default function AdminDashboard() {
         orderGroups[groupKey].status = order.status;
       }
     });
-    
-    // Convert to array and calculate totals
     return Object.values(orderGroups).map(group => ({
       ...group,
       totalAmount: group.items.reduce((sum, item) => sum + item.subtotal, 0),
@@ -85,36 +84,21 @@ export default function AdminDashboard() {
     })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [enrichedOrders]);
 
-  // Calculate pending orders using grouped orders
   const pendingOrders = useMemo(() => {
     return groupedOrders.filter(o => o.status !== "Delivered" && o.status !== "Paid").length;
   }, [groupedOrders]);
 
-  // Calculate sales by status
   const salesByStatus = useMemo(() => {
-    const stats = {
-      total: 0,
-      pending: 0,
-      paid: 0,
-      delivered: 0
-    };
-
+    const stats = { total: 0, pending: 0, paid: 0, delivered: 0 };
     groupedOrders.forEach(order => {
       stats.total += order.totalAmount;
-      
-      if (order.status === 'Pending') {
-        stats.pending += order.totalAmount;
-      } else if (order.status === 'Paid') {
-        stats.paid += order.totalAmount;
-      } else if (order.status === 'Delivered') {
-        stats.delivered += order.totalAmount;
-      }
+      if (order.status === 'Pending') stats.pending += order.totalAmount;
+      else if (order.status === 'Paid') stats.paid += order.totalAmount;
+      else if (order.status === 'Delivered') stats.delivered += order.totalAmount;
     });
-
     return stats;
   }, [groupedOrders]);
 
-  // Show success/error messages temporarily
   const showMessage = (message, isError = false) => {
     if (isError) {
       setError(message);
@@ -125,7 +109,6 @@ export default function AdminDashboard() {
     }
   };
 
-  // Fetch products & orders
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -146,40 +129,30 @@ export default function AdminDashboard() {
     fetchData();
   }, []);
 
-  // Add Product
   const addProduct = async () => {
     if (!newItem.name || !newItem.price || !newItem.stock) {
       showMessage("Please fill in all required fields", true);
       return;
     }
-
     try {
       const formData = new FormData();
       formData.append("name", newItem.name);
       formData.append("price", newItem.price);
+      formData.append("description", newItem.description);
       formData.append("stock", Number(newItem.stock));
-      if (newItem.imageFile) {
-        formData.append("image", newItem.imageFile);
-      }
-
-      const res = await axios.post(
-        "http://localhost:5000/products",
-        formData,
-        { headers: { "Content-Type": "multipart/form-data" } }
-      );
-
-      setProducts([
-        ...products,
-        {
-          id: res.data.productId,
-          name: newItem.name,
-          price: newItem.price,
-          stock: Number(newItem.stock),
-          image: res.data.image || null,
-        },
-      ]);
-
-      setNewItem({ name: "", price: "", stock: "", imageFile: null });
+      if (newItem.imageFile) formData.append("image", newItem.imageFile);
+      const res = await axios.post("http://localhost:5000/products", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      setProducts([...products, {
+        id: res.data.productId,
+        name: newItem.name,
+        price: newItem.price,
+        description: newItem.description,
+        stock: Number(newItem.stock),
+        image: res.data.image || null,
+      }]);
+      setNewItem({ name: "", price: "", description: "", stock: "", imageFile: null });
       showMessage("Product added successfully!");
     } catch (err) {
       console.error(err);
@@ -187,14 +160,10 @@ export default function AdminDashboard() {
     }
   };
 
-  // Delete Product
   const deleteProduct = (id, name) => {
     if (!id) return showMessage("Invalid product ID", true);
-
     if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return;
-
-    axios
-      .delete(`http://localhost:5000/products/${id}`)
+    axios.delete(`http://localhost:5000/products/${id}`)
       .then(() => {
         setProducts(products.filter((p) => p.id !== id));
         showMessage("Product deleted successfully!");
@@ -205,31 +174,26 @@ export default function AdminDashboard() {
       });
   };
 
-  // Start Edit
   const startEdit = (product) => {
     setEditId(product.id);
     setEditItem({ name: product.name, price: product.price, stock: product.stock, imageFile: null });
   };
 
-  // Save Edit
   const saveEdit = () => {
     if (!editItem.name || !editItem.price || !editItem.stock) {
       showMessage("Please fill in all required fields", true);
       return;
     }
-
     const formData = new FormData();
     formData.append("name", editItem.name);
     formData.append("price", editItem.price);
     formData.append("stock", editItem.stock);
-    if (editItem.imageFile) {
-      formData.append("image", editItem.imageFile);
-    }
-
+    formData.append("description", editItem.description);
+    if (editItem.imageFile) formData.append("image", editItem.imageFile);
     axios.put(`http://localhost:5000/products/${editId}`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     })
-      .then(res => {
+      .then(() => {
         setProducts(products.map((p) => p.id === editId ? { ...p, name: editItem.name, price: editItem.price, stock: editItem.stock } : p));
         setEditId(null);
         setEditItem({ name: "", price: "", stock: "", imageFile: null });
@@ -241,30 +205,16 @@ export default function AdminDashboard() {
       });
   };
 
-  // Update Order Status - now handles grouped orders
   const updateOrderStatus = async (orderGroup, customerName) => {
     const itemCount = orderGroup.items.length;
-    const confirmMsg = `Update status for ${customerName}'s order (${itemCount} item${itemCount > 1 ? 's' : ''})?`;
-    
-    if (!window.confirm(confirmMsg)) return;
-
+    if (!window.confirm(`Update status for ${customerName}'s order (${itemCount} item${itemCount > 1 ? 's' : ''})?`)) return;
     try {
-      // Update all orders in the group
       const updatePromises = orderGroup.orderIds.map(orderId =>
         axios.patch(`http://localhost:5000/orders/${orderId}/status`)
       );
-      
       const responses = await Promise.all(updatePromises);
-      const newStatus = responses[0].data.status; // All will have same status
-      
-      // Update local state
-      setOrders(orders.map(o => {
-        if (orderGroup.orderIds.includes(o.id)) {
-          return { ...o, status: newStatus };
-        }
-        return o;
-      }));
-      
+      const newStatus = responses[0].data.status;
+      setOrders(orders.map(o => orderGroup.orderIds.includes(o.id) ? { ...o, status: newStatus } : o));
       showMessage(`Order status updated to ${newStatus}!`);
     } catch (err) {
       console.error(err);
@@ -272,11 +222,30 @@ export default function AdminDashboard() {
     }
   };
 
+  // Get admin name from localStorage
+  const adminUser = (() => {
+    try { return JSON.parse(localStorage.getItem("authUser")); } catch { return null; }
+  })();
+
   return (
     <>
       <div className="dashboard">
         <div className="header">
-          <h1 className="title">Admin Dashboard</h1>
+          <div className="header-top">
+            <h1 className="title">Admin Dashboard</h1>
+            {/* ✅ Logout Button */}
+            <div className="admin-info">
+              {adminUser && (
+                <span className="admin-name">
+                  👤 {adminUser.name || adminUser.email || "Admin"}
+                </span>
+              )}
+              <button className="logout-btn" onClick={handleLogout}>
+                <span className="logout-icon">🚪</span>
+                Logout
+              </button>
+            </div>
+          </div>
           <div className="stats">
             <div className="stat-card">
               <span className="stat-label">Total Products</span>
@@ -293,91 +262,50 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Messages */}
         {error && <div className="message error">{error}</div>}
         {success && <div className="message success">{success}</div>}
 
-        {/* Tabs */}
         <div className="tabs">
-          <button 
-            className={`tab ${activeTab === "products" ? "active" : ""}`} 
-            onClick={() => setActiveTab("products")}
-          >
-            <span className="tab-icon">📦</span>
-            Products
+          <button className={`tab ${activeTab === "products" ? "active" : ""}`} onClick={() => setActiveTab("products")}>
+            <span className="tab-icon">📦</span>Products
           </button>
-          <button 
-            className={`tab ${activeTab === "orders" ? "active" : ""}`} 
-            onClick={() => setActiveTab("orders")}
-          >
-            <span className="tab-icon">📋</span>
-            Orders
+          <button className={`tab ${activeTab === "orders" ? "active" : ""}`} onClick={() => setActiveTab("orders")}>
+            <span className="tab-icon">📋</span>Orders
           </button>
         </div>
 
-        {/* Add Product */}
         {activeTab === "products" && (
           <div className="form-card">
-            <h2 className="form-title">
-              <span className="form-icon">➕</span>
-              Add New Product
-            </h2>
+            <h2 className="form-title"><span className="form-icon">➕</span>Add New Product</h2>
             <div className="form-grid">
               <div className="form-group">
                 <label htmlFor="productName">Product Name *</label>
-                <input 
-                  id="productName"
-                  type="text" 
-                  placeholder="Enter product name" 
-                  value={newItem.name} 
-                  onChange={(e) => setNewItem({ ...newItem, name: e.target.value })} 
-                />
+                <input id="productName" type="text" placeholder="Enter product name" value={newItem.name} onChange={(e) => setNewItem({ ...newItem, name: e.target.value })} />
               </div>
               <div className="form-group">
                 <label htmlFor="price">Price ($) *</label>
-                <input 
-                  id="price"
-                  type="number" 
-                  placeholder="0.00" 
-                  min="0"
-                  step="0.01"
-                  value={newItem.price} 
-                  onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} 
-                />
+                <input id="price" type="number" placeholder="0.00" min="0" step="0.01" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label htmlFor="description">Description</label>
+                <textarea id="description" placeholder="Enter product description" value={newItem.description} onChange={(e) => setNewItem({ ...newItem, description: e.target.value })} />
               </div>
               <div className="form-group">
                 <label htmlFor="stock">Stock Quantity *</label>
-                <input 
-                  id="stock"
-                  type="number" 
-                  placeholder="0" 
-                  min="0"
-                  value={newItem.stock} 
-                  onChange={(e) => setNewItem({ ...newItem, stock: e.target.value })} 
-                />
+                <input id="stock" type="number" placeholder="0" min="0" value={newItem.stock} onChange={(e) => setNewItem({ ...newItem, stock: e.target.value })} />
               </div>
               <div className="form-group">
                 <label htmlFor="image">Product Image</label>
                 <div className="file-input">
-                  <input 
-                    id="image"
-                    type="file" 
-                    accept="image/*" 
-                    onChange={(e) => setNewItem({ ...newItem, imageFile: e.target.files[0] })} 
-                  />
-                  <span className="file-name">
-                    {newItem.imageFile ? newItem.imageFile.name : "Choose file..."}
-                  </span>
+                  <input id="image" type="file" accept="image/*" onChange={(e) => setNewItem({ ...newItem, imageFile: e.target.files[0] })} />
+                  <span className="file-name">{newItem.imageFile ? newItem.imageFile.name : "Choose file..."}</span>
                 </div>
               </div>
             </div>
-            <button className="primary-btn" onClick={addProduct}>
-              Add Product
-            </button>
+            <button className="primary-btn" onClick={addProduct}>Add Product</button>
           </div>
         )}
 
-        {/* Products Section */}
         {activeTab === "products" && (
           <div className="section">
             <h2 className="section-title">Product List</h2>
@@ -396,29 +324,10 @@ export default function AdminDashboard() {
                       <div className="edit-form">
                         <h3>Edit Product</h3>
                         <div className="edit-grid">
-                          <input 
-                            type="text" 
-                            placeholder="Product name"
-                            value={editItem.name} 
-                            onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} 
-                          />
-                          <input 
-                            type="number" 
-                            placeholder="Price"
-                            value={editItem.price} 
-                            onChange={(e) => setEditItem({ ...editItem, price: e.target.value })} 
-                          />
-                          <input 
-                            type="number" 
-                            placeholder="Stock"
-                            value={editItem.stock} 
-                            onChange={(e) => setEditItem({ ...editItem, stock: e.target.value })} 
-                          />
-                          <input 
-                            type="file" 
-                            accept="image/*" 
-                            onChange={(e) => setEditItem({ ...editItem, imageFile: e.target.files[0] })} 
-                          />
+                          <input type="text" placeholder="Product name" value={editItem.name} onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} />
+                          <input type="number" placeholder="Price" value={editItem.price} onChange={(e) => setEditItem({ ...editItem, price: e.target.value })} />
+                          <input type="number" placeholder="Stock" value={editItem.stock} onChange={(e) => setEditItem({ ...editItem, stock: e.target.value })} />
+                          <input type="file" accept="image/*" onChange={(e) => setEditItem({ ...editItem, imageFile: e.target.files[0] })} />
                         </div>
                         <div className="actions">
                           <button onClick={saveEdit} className="save-btn">Save Changes</button>
@@ -432,33 +341,19 @@ export default function AdminDashboard() {
                             <h3 className="product-name">{p.name}</h3>
                             <div className="product-meta">
                               <span className="price">${parseFloat(p.price || 0).toFixed(2)}</span>
-                              <span className={`stock ${p.stock < 10 ? "low" : p.stock < 50 ? "medium" : "high"}`}>
-                                Stock: {p.stock}
-                              </span>
+                              <span className={`stock ${p.stock < 10 ? "low" : p.stock < 50 ? "medium" : "high"}`}>Stock: {p.stock}</span>
                             </div>
                           </div>
                           {p.image && (
-  <div className="product-image">
-    <img 
-      src={`http://localhost:5000/uploads/${p.image}`}
-      alt={p.name}
-      onError={(e) => {
-        e.target.src = "https://via.placeholder.com/80x80?text=No+Image";
-        e.target.onerror = null;
-      }}
-    />
-  </div>
-)}
+                            <div className="product-image">
+                              <img src={`http://localhost:5000/uploads/${p.image}`} alt={p.name}
+                                onError={(e) => { e.target.src = "https://via.placeholder.com/80x80?text=No+Image"; e.target.onerror = null; }} />
+                            </div>
+                          )}
                         </div>
                         <div className="actions">
-                          <button className="edit-btn" onClick={() => startEdit(p)}>
-                            <span className="btn-icon">✏️</span>
-                            Edit
-                          </button>
-                          <button className="delete-btn" onClick={() => deleteProduct(p.id, p.name)}>
-                            <span className="btn-icon">🗑️</span>
-                            Delete
-                          </button>
+                          <button className="edit-btn" onClick={() => startEdit(p)}><span className="btn-icon">✏️</span>Edit</button>
+                          <button className="delete-btn" onClick={() => deleteProduct(p.id, p.name)}><span className="btn-icon">🗑️</span>Delete</button>
                         </div>
                       </>
                     )}
@@ -469,7 +364,6 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Orders Section - Updated to show grouped orders */}
         {activeTab === "orders" && (
           <div className="section">
             <h2 className="section-title">Recent Orders</h2>
@@ -489,9 +383,7 @@ export default function AdminDashboard() {
                         <h3>{orderGroup.cust_name || 'Unknown Customer'}</h3>
                         <div className="customer-details">
                           <span className="phone">📱 {orderGroup.cust_phone || 'N/A'}</span>
-                          {orderGroup.cust_email && (
-                            <span className="email">✉️ {orderGroup.cust_email}</span>
-                          )}
+                          {orderGroup.cust_email && <span className="email">✉️ {orderGroup.cust_email}</span>}
                           <span className="location">📍 {orderGroup.location || 'N/A'}</span>
                         </div>
                       </div>
@@ -501,12 +393,9 @@ export default function AdminDashboard() {
                         </span>
                       </div>
                     </div>
-                    
                     <div className="order-items">
                       <div className="items-header">
-                        <span className="items-count">
-                          {orderGroup.items.length} item{orderGroup.items.length > 1 ? 's' : ''}
-                        </span>
+                        <span className="items-count">{orderGroup.items.length} item{orderGroup.items.length > 1 ? 's' : ''}</span>
                       </div>
                       {orderGroup.items.map((item) => (
                         <div key={item.id} className="order-item">
@@ -515,30 +404,18 @@ export default function AdminDashboard() {
                             <span className="item-qty">Qty: {item.qty}</span>
                           </div>
                           <div className="item-pricing">
-                            <span className="item-unit-price">
-                              ${item.price.toFixed(2)} each
-                            </span>
-                            <span className="item-subtotal">
-                              ${item.subtotal.toFixed(2)}
-                            </span>
+                            <span className="item-unit-price">${item.price.toFixed(2)} each</span>
+                            <span className="item-subtotal">${item.subtotal.toFixed(2)}</span>
                           </div>
                         </div>
                       ))}
                     </div>
-                    
                     <div className="order-footer">
                       <div className="order-total">
                         <span className="total-label">Total Amount:</span>
-                        <strong className="total-amount">
-                          ${orderGroup.totalAmount.toFixed(2)}
-                        </strong>
+                        <strong className="total-amount">${orderGroup.totalAmount.toFixed(2)}</strong>
                       </div>
-                      <button 
-                        className="status-btn"
-                        onClick={() => updateOrderStatus(orderGroup, orderGroup.cust_name)}
-                      >
-                        Update Status
-                      </button>
+                      <button className="status-btn" onClick={() => updateOrderStatus(orderGroup, orderGroup.cust_name)}>Update Status</button>
                     </div>
                   </div>
                 ))}
@@ -564,13 +441,10 @@ export default function AdminDashboard() {
               <span className="breakdown-value">${salesByStatus.delivered.toFixed(2)}</span>
             </div>
           </div>
-          <p className="summary-note">
-            From {groupedOrders.length} order{groupedOrders.length !== 1 ? 's' : ''}
-          </p>
+          <p className="summary-note">From {groupedOrders.length} order{groupedOrders.length !== 1 ? 's' : ''}</p>
         </div>
       </div>
 
-      {/* Enhanced CSS */}
       <style>{`
         .dashboard { 
           padding: 2rem;
@@ -581,20 +455,73 @@ export default function AdminDashboard() {
           min-height: 100vh;
         }
 
-        .header {
-          margin-bottom: 2rem;
+        .header { margin-bottom: 2rem; }
+
+        /* ✅ New header-top for title + logout */
+        .header-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1.5rem;
+          flex-wrap: wrap;
+          gap: 1rem;
         }
 
         .title { 
           font-size: 2.5rem;
           font-weight: 800;
-          text-align: center;
           background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;
-          margin-bottom: 1.5rem;
+          margin: 0;
         }
+
+        /* ✅ Admin info + logout */
+        .admin-info {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+
+        .admin-name {
+          font-size: 0.9rem;
+          font-weight: 600;
+          color: #475569;
+          background: white;
+          padding: 0.5rem 1rem;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+          border: 1px solid #e2e8f0;
+        }
+
+        .logout-btn {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.625rem 1.25rem;
+          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+        }
+
+        .logout-btn:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
+          background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+        }
+
+        .logout-btn:active {
+          transform: translateY(0);
+        }
+
+        .logout-icon { font-size: 1rem; }
 
         .stats {
           display: grid;
@@ -612,9 +539,7 @@ export default function AdminDashboard() {
           transition: transform 0.2s ease;
         }
 
-        .stat-card:hover {
-          transform: translateY(-2px);
-        }
+        .stat-card:hover { transform: translateY(-2px); }
 
         .stat-label {
           display: block;
@@ -646,17 +571,8 @@ export default function AdminDashboard() {
           to { transform: translateY(0); opacity: 1; }
         }
 
-        .error {
-          background: #fee2e2;
-          color: #dc2626;
-          border: 1px solid #fecaca;
-        }
-
-        .success {
-          background: #dcfce7;
-          color: #16a34a;
-          border: 1px solid #bbf7d0;
-        }
+        .error { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
+        .success { background: #dcfce7; color: #16a34a; border: 1px solid #bbf7d0; }
 
         .tabs {
           display: flex;
@@ -685,16 +601,8 @@ export default function AdminDashboard() {
           transition: all 0.2s ease;
         }
 
-        .tab:hover {
-          background: #f1f5f9;
-          color: #475569;
-        }
-
-        .tab.active {
-          background: #3b82f6;
-          color: white;
-          box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
-        }
+        .tab:hover { background: #f1f5f9; color: #475569; }
+        .tab.active { background: #3b82f6; color: white; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
 
         .form-card {
           background: white;
@@ -722,44 +630,27 @@ export default function AdminDashboard() {
           margin-bottom: 1.5rem;
         }
 
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .form-group label {
-          font-weight: 600;
-          color: #475569;
-          font-size: 0.875rem;
-        }
-
-        .form-group input {
+        .form-group { display: flex; flex-direction: column; gap: 0.5rem; }
+        .form-group label { font-weight: 600; color: #475569; font-size: 0.875rem; }
+        .form-group input, .form-group textarea {
           padding: 0.75rem 1rem;
           border: 2px solid #e2e8f0;
           border-radius: 8px;
           font-size: 1rem;
           transition: border-color 0.2s ease;
         }
-
-        .form-group input:focus {
+        .form-group input:focus, .form-group textarea:focus {
           outline: none;
           border-color: #3b82f6;
           box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
         }
 
-        .file-input {
-          position: relative;
-          overflow: hidden;
-        }
-
+        .file-input { position: relative; overflow: hidden; }
         .file-input input[type="file"] {
           position: absolute;
-          left: 0;
-          top: 0;
+          left: 0; top: 0;
           opacity: 0;
-          width: 100%;
-          height: 100%;
+          width: 100%; height: 100%;
           cursor: pointer;
         }
 
@@ -783,10 +674,6 @@ export default function AdminDashboard() {
           font-weight: 600;
           cursor: pointer;
           transition: all 0.2s ease;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.5rem;
         }
 
         .primary-btn:hover {
@@ -794,16 +681,8 @@ export default function AdminDashboard() {
           box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
 
-        .section {
-          margin-bottom: 2rem;
-        }
-
-        .section-title {
-          font-size: 1.5rem;
-          font-weight: 700;
-          color: #1e293b;
-          margin-bottom: 1.5rem;
-        }
+        .section { margin-bottom: 2rem; }
+        .section-title { font-size: 1.5rem; font-weight: 700; color: #1e293b; margin-bottom: 1.5rem; }
 
         .loading, .empty-state {
           text-align: center;
@@ -814,17 +693,8 @@ export default function AdminDashboard() {
           border: 2px dashed #e2e8f0;
         }
 
-        .empty-icon {
-          font-size: 3rem;
-          display: block;
-          margin-bottom: 1rem;
-        }
-
-        .list {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
+        .empty-icon { font-size: 3rem; display: block; margin-bottom: 1rem; }
+        .list { display: flex; flex-direction: column; gap: 1rem; }
 
         .card {
           background: white;
@@ -840,9 +710,7 @@ export default function AdminDashboard() {
           box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1);
         }
 
-        .product-card {
-          padding: 1.5rem;
-        }
+        .product-card { padding: 1.5rem; }
 
         .product-header {
           display: flex;
@@ -851,59 +719,20 @@ export default function AdminDashboard() {
           margin-bottom: 1rem;
         }
 
-        .product-info {
-          flex: 1;
-        }
+        .product-info { flex: 1; }
+        .product-name { font-size: 1.25rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
+        .product-meta { display: flex; gap: 1rem; align-items: center; }
+        .price { font-size: 1.125rem; font-weight: 700; color: #059669; }
 
-        .product-name {
-          font-size: 1.25rem;
-          font-weight: 700;
-          color: #1e293b;
-          margin-bottom: 0.5rem;
-        }
-
-        .product-meta {
-          display: flex;
-          gap: 1rem;
-          align-items: center;
-        }
-
-        .price {
-          font-size: 1.125rem;
-          font-weight: 700;
-          color: #059669;
-        }
-
-        .stock {
-          padding: 0.25rem 0.75rem;
-          border-radius: 9999px;
-          font-size: 0.875rem;
-          font-weight: 600;
-        }
-
+        .stock { padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 600; }
         .stock.high { background: #dcfce7; color: #166534; }
         .stock.medium { background: #fef3c7; color: #92400e; }
         .stock.low { background: #fee2e2; color: #991b1b; }
 
-        .product-image {
-          width: 80px;
-          height: 80px;
-          border-radius: 8px;
-          overflow: hidden;
-          border: 2px solid #e2e8f0;
-        }
+        .product-image { width: 80px; height: 80px; border-radius: 8px; overflow: hidden; border: 2px solid #e2e8f0; }
+        .product-image img { width: 100%; height: 100%; object-fit: cover; }
 
-        .product-image img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-
-        .actions {
-          display: flex;
-          gap: 0.75rem;
-          margin-top: 1rem;
-        }
+        .actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
 
         .edit-btn, .delete-btn, .save-btn, .cancel-btn, .status-btn {
           padding: 0.5rem 1.25rem;
@@ -918,53 +747,17 @@ export default function AdminDashboard() {
           border: none;
         }
 
-        .edit-btn {
-          background: #dbeafe;
-          color: #1d4ed8;
-        }
+        .edit-btn { background: #dbeafe; color: #1d4ed8; }
+        .edit-btn:hover { background: #bfdbfe; }
+        .delete-btn { background: #fee2e2; color: #dc2626; }
+        .delete-btn:hover { background: #fecaca; }
+        .save-btn { background: #10b981; color: white; }
+        .save-btn:hover { background: #059669; }
+        .cancel-btn { background: #f1f5f9; color: #64748b; }
+        .cancel-btn:hover { background: #e2e8f0; }
 
-        .edit-btn:hover {
-          background: #bfdbfe;
-        }
-
-        .delete-btn {
-          background: #fee2e2;
-          color: #dc2626;
-        }
-
-        .delete-btn:hover {
-          background: #fecaca;
-        }
-
-        .save-btn {
-          background: #10b981;
-          color: white;
-        }
-
-        .save-btn:hover {
-          background: #059669;
-        }
-
-        .cancel-btn {
-          background: #f1f5f9;
-          color: #64748b;
-        }
-
-        .cancel-btn:hover {
-          background: #e2e8f0;
-        }
-
-        .edit-form {
-          background: #f8fafc;
-          border-radius: 8px;
-          padding: 1.5rem;
-        }
-
-        .edit-form h3 {
-          margin-top: 0;
-          margin-bottom: 1rem;
-          color: #1e293b;
-        }
+        .edit-form { background: #f8fafc; border-radius: 8px; padding: 1.5rem; }
+        .edit-form h3 { margin-top: 0; margin-bottom: 1rem; color: #1e293b; }
 
         .edit-grid {
           display: grid;
@@ -973,15 +766,9 @@ export default function AdminDashboard() {
           margin-bottom: 1rem;
         }
 
-        .edit-grid input {
-          padding: 0.5rem;
-          border: 2px solid #e2e8f0;
-          border-radius: 6px;
-        }
+        .edit-grid input { padding: 0.5rem; border: 2px solid #e2e8f0; border-radius: 6px; }
 
-        .order-card {
-          padding: 1.5rem;
-        }
+        .order-card { padding: 1.5rem; }
 
         .order-header {
           display: flex;
@@ -992,20 +779,9 @@ export default function AdminDashboard() {
           border-bottom: 2px solid #f1f5f9;
         }
 
-        .order-customer h3 {
-          font-size: 1.125rem;
-          font-weight: 700;
-          color: #1e293b;
-          margin-bottom: 0.5rem;
-        }
+        .order-customer h3 { font-size: 1.125rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
 
-        .customer-details {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 1rem;
-          font-size: 0.875rem;
-          color: #64748b;
-        }
+        .customer-details { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.875rem; color: #64748b; }
 
         .status-badge {
           padding: 0.375rem 0.875rem;
@@ -1020,26 +796,10 @@ export default function AdminDashboard() {
         .status-badge.paid { background: #fef3c7; color: #92400e; }
         .status-badge.pending { background: #fee2e2; color: #991b1b; }
 
-        .order-items {
-          margin-bottom: 1rem;
-          background: #f8fafc;
-          padding: 1rem;
-          border-radius: 8px;
-        }
+        .order-items { margin-bottom: 1rem; background: #f8fafc; padding: 1rem; border-radius: 8px; }
 
-        .items-header {
-          margin-bottom: 0.75rem;
-          padding-bottom: 0.5rem;
-          border-bottom: 1px solid #e2e8f0;
-        }
-
-        .items-count {
-          font-size: 0.875rem;
-          font-weight: 600;
-          color: #64748b;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
+        .items-header { margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e2e8f0; }
+        .items-count { font-size: 0.875rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
 
         .order-item {
           display: flex;
@@ -1052,43 +812,13 @@ export default function AdminDashboard() {
           border: 1px solid #e2e8f0;
         }
 
-        .order-item:last-child {
-          margin-bottom: 0;
-        }
-
-        .item-details {
-          display: flex;
-          flex-direction: column;
-          gap: 0.25rem;
-        }
-
-        .item-name {
-          font-weight: 600;
-          color: #1e293b;
-        }
-
-        .item-qty {
-          font-size: 0.875rem;
-          color: #64748b;
-        }
-
-        .item-pricing {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 0.25rem;
-        }
-
-        .item-unit-price {
-          font-size: 0.875rem;
-          color: #64748b;
-        }
-
-        .item-subtotal {
-          font-weight: 600;
-          color: #059669;
-          font-size: 1rem;
-        }
+        .order-item:last-child { margin-bottom: 0; }
+        .item-details { display: flex; flex-direction: column; gap: 0.25rem; }
+        .item-name { font-weight: 600; color: #1e293b; }
+        .item-qty { font-size: 0.875rem; color: #64748b; }
+        .item-pricing { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; }
+        .item-unit-price { font-size: 0.875rem; color: #64748b; }
+        .item-subtotal { font-weight: 600; color: #059669; font-size: 1rem; }
 
         .order-footer {
           display: flex;
@@ -1098,23 +828,9 @@ export default function AdminDashboard() {
           border-top: 2px solid #f1f5f9;
         }
 
-        .order-total {
-          display: flex;
-          flex-direction: column;
-          gap: 0.25rem;
-        }
-
-        .total-label {
-          font-size: 0.875rem;
-          color: #64748b;
-          font-weight: 600;
-        }
-
-        .total-amount {
-          font-size: 1.5rem;
-          font-weight: 800;
-          color: #1e293b;
-        }
+        .order-total { display: flex; flex-direction: column; gap: 0.25rem; }
+        .total-label { font-size: 0.875rem; color: #64748b; font-weight: 600; }
+        .total-amount { font-size: 1.5rem; font-weight: 800; color: #1e293b; }
 
         .status-btn {
           background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
@@ -1136,17 +852,8 @@ export default function AdminDashboard() {
           margin-top: 2rem;
         }
 
-        .summary-title {
-          font-size: 1.25rem;
-          font-weight: 600;
-          margin-bottom: 0.5rem;
-        }
-
-        .summary-amount {
-          font-size: 3rem;
-          font-weight: 800;
-          margin-bottom: 1.5rem;
-        }
+        .summary-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; }
+        .summary-amount { font-size: 3rem; font-weight: 800; margin-bottom: 1.5rem; }
 
         .revenue-breakdown {
           display: grid;
@@ -1169,53 +876,19 @@ export default function AdminDashboard() {
           transition: all 0.2s ease;
         }
 
-        .breakdown-item:hover {
-          background: rgba(255, 255, 255, 0.25);
-          transform: translateY(-2px);
-        }
-
-        .breakdown-label {
-          font-size: 0.875rem;
-          opacity: 0.9;
-          font-weight: 600;
-        }
-
-        .breakdown-value {
-          font-size: 1.5rem;
-          font-weight: 800;
-        }
-
-        .summary-note {
-          opacity: 0.9;
-          font-size: 0.875rem;
-        }
-
-        .btn-icon {
-          font-size: 0.875rem;
-        }
+        .breakdown-item:hover { background: rgba(255, 255, 255, 0.25); transform: translateY(-2px); }
+        .breakdown-label { font-size: 0.875rem; opacity: 0.9; font-weight: 600; }
+        .breakdown-value { font-size: 1.5rem; font-weight: 800; }
+        .summary-note { opacity: 0.9; font-size: 0.875rem; }
+        .btn-icon { font-size: 0.875rem; }
 
         @media (max-width: 768px) {
-          .order-footer {
-            flex-direction: column;
-            gap: 1rem;
-            align-items: stretch;
-          }
-
-          .order-total {
-            align-items: center;
-          }
-
-          .status-btn {
-            width: 100%;
-          }
-
-          .item-pricing {
-            align-items: flex-start;
-          }
-
-          .revenue-breakdown {
-            grid-template-columns: 1fr;
-          }
+          .header-top { flex-direction: column; align-items: flex-start; }
+          .title { font-size: 1.75rem; }
+          .order-footer { flex-direction: column; gap: 1rem; align-items: stretch; }
+          .order-total { align-items: center; }
+          .status-btn { width: 100%; }
+          .revenue-breakdown { grid-template-columns: 1fr; }
         }
       `}</style>
     </>

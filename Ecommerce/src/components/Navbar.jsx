@@ -1,10 +1,25 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 
 export default function Navbar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [user, setUser] = useState(null);
   
+  // Load user from localStorage
+  useEffect(() => {
+    const userData = localStorage.getItem("user");
+    if (userData && userData !== "undefined" && userData !== "null") {
+      try {
+        setUser(JSON.parse(userData));
+      } catch (e) {
+        console.error("Error parsing user data:", e);
+        localStorage.removeItem("user");
+      }
+    }
+  }, [location]); // Re-check on route changes
+
   // Check if current path matches link
   const isActive = (path) => location.pathname === path;
 
@@ -25,6 +40,25 @@ export default function Navbar() {
       document.body.style.overflow = 'unset';
     };
   }, [isMenuOpen]);
+
+  // Get user initials for avatar
+  const getUserInitials = () => {
+    if (!user) return "U";
+    const name = user.fullname || user.name || user.email || "U";
+    return name
+      .split(" ")
+      .map(w => w[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("user");
+    setUser(null);
+    setIsMenuOpen(false);
+    window.location.href = "/";
+  };
 
   return (
     <>
@@ -60,14 +94,41 @@ export default function Navbar() {
               <span className="nav-link-icon">📞</span>
               <span className="nav-link-text">Contact</span>
             </Link>
+            
+            {user && (
+              <Link 
+                to="/wishlist" 
+                className={`nav-link ${isActive("/wishlist") ? "active" : ""}`}
+              >
+                <span className="nav-link-icon">❤️</span>
+                <span className="nav-link-text">Wishlist</span>
+              </Link>
+            )}
           </div>
 
           {/* Right Section: My Account and Menu Toggle */}
           <div className="right-section">
-            {/* My Account Button */}
-            <Link to="/account" className="account-button">
-              <span className="account-icon">👤</span>
-              <span className="account-text">My Account</span>
+            {/* My Account Button - Enhanced with logged-in state */}
+            <Link 
+              to={user ? "/userdashboard" : "/ulogin"} 
+              className={`account-button ${user ? "logged-in" : ""}`}
+            >
+              {user ? (
+                <>
+                  <div className="user-avatar-nav">{getUserInitials()}</div>
+                  <div className="user-info-nav">
+                    <span className="user-name-nav">
+                      {user.fullname || user.name || user.email}
+                    </span>
+                    <span className="logged-badge-nav">● Logged In</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="account-icon">👤</span>
+                  <span className="account-text">My Account</span>
+                </>
+              )}
             </Link>
 
             {/* Menu Toggle Button */}
@@ -83,7 +144,7 @@ export default function Navbar() {
             </button>
           </div>
           
-          {/* Mobile Menu - Admin Link in Mobile Menu */}
+          {/* Mobile Menu */}
           <div className={`mobile-menu ${isMenuOpen ? 'open' : ''}`}>
             <div className="mobile-menu-header">
               <span className="mobile-menu-title">Menu</span>
@@ -96,6 +157,22 @@ export default function Navbar() {
             </div>
             
             <div className="mobile-menu-links">
+              {/* User info at top if logged in */}
+              {user && (
+                <>
+                  <div className="mobile-user-card">
+                    <div className="mobile-user-avatar">{getUserInitials()}</div>
+                    <div className="mobile-user-info">
+                      <span className="mobile-user-name">
+                        {user.fullname || user.name || user.email}
+                      </span>
+                      <span className="mobile-logged-badge">● Logged In</span>
+                    </div>
+                  </div>
+                  <div className="mobile-menu-divider"></div>
+                </>
+              )}
+
               <Link 
                 to="/" 
                 className={`mobile-nav-link ${isActive("/") ? "active" : ""}`}
@@ -123,25 +200,68 @@ export default function Navbar() {
                 <span className="nav-link-text">Contact</span>
               </Link>
               
+              {user && (
+                <Link 
+                  to="/wishlist" 
+                  className={`mobile-nav-link ${isActive("/wishlist") ? "active" : ""}`}
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  <span className="nav-link-icon">❤️</span>
+                  <span className="nav-link-text">Wishlist</span>
+                </Link>
+              )}
+              
               <div className="mobile-menu-divider"></div>
               
-              <Link 
-                to="/account" 
-                className={`mobile-nav-link ${isActive("/account") ? "active" : ""}`}
-                onClick={() => setIsMenuOpen(false)}
-              >
-                <span className="nav-link-icon">👤</span>
-                <span className="nav-link-text">My Account</span>
-              </Link>
-              
-              <Link 
-                to="/login" 
-                className={`mobile-nav-link ${isActive("/login") ? "active" : ""}`}
-                onClick={() => setIsMenuOpen(false)}
-              >
-                <span className="nav-link-icon">🔐</span>
-                <span className="nav-link-text">Admin</span>
-              </Link>
+              {user ? (
+                <>
+                  <Link 
+                    to="/userdashboard" 
+                    className={`mobile-nav-link ${isActive("/userdashboard") ? "active" : ""}`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    <span className="nav-link-icon">📊</span>
+                    <span className="nav-link-text">Dashboard</span>
+                  </Link>
+                  
+                  <Link 
+                    to="/profile" 
+                    className={`mobile-nav-link ${isActive("/profile") ? "active" : ""}`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    <span className="nav-link-icon">⚙️</span>
+                    <span className="nav-link-text">Profile Settings</span>
+                  </Link>
+                  
+                  <button 
+                    className="mobile-nav-link logout-btn"
+                    onClick={handleLogout}
+                  >
+                    <span className="nav-link-icon">🚪</span>
+                    <span className="nav-link-text">Sign Out</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link 
+                    to="/ulogin" 
+                    className={`mobile-nav-link ${isActive("/ulogin") ? "active" : ""}`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    <span className="nav-link-icon">👤</span>
+                    <span className="nav-link-text">My Account</span>
+                  </Link>
+                  
+                  <Link 
+                    to="/login" 
+                    className={`mobile-nav-link ${isActive("/login") ? "active" : ""}`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    <span className="nav-link-icon">🔐</span>
+                    <span className="nav-link-text">Admin</span>
+                  </Link>
+                </>
+              )}
             </div>
           </div>
 
@@ -152,7 +272,7 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* Enhanced CSS with improved UX */}
+      {/* Enhanced CSS with logged-in indicator styles */}
       <style>{`
         .navbar {
           background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
@@ -219,7 +339,7 @@ export default function Navbar() {
           z-index: 1002;
         }
 
-        /* Account Button */
+        /* Account Button - Default State */
         .account-button {
           display: flex;
           align-items: center;
@@ -240,12 +360,109 @@ export default function Navbar() {
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
+        /* Account Button - Logged In State */
+        .account-button.logged-in {
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          border: 1px solid rgba(255, 255, 255, 0.4);
+          padding: 6px 12px;
+          box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+        }
+
+        .account-button.logged-in:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+        }
+
+        .user-avatar-nav {
+          width: 36px;
+          height: 36px;
+          background: white;
+          color: #059669;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 800;
+          font-size: 0.85rem;
+          flex-shrink: 0;
+        }
+
+        .user-info-nav {
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          align-items: flex-start;
+        }
+
+        .user-name-nav {
+          color: white;
+          font-weight: 700;
+          font-size: 0.9rem;
+          line-height: 1.2;
+          max-width: 150px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .logged-badge-nav {
+          color: rgba(255, 255, 255, 0.9);
+          font-size: 0.7rem;
+          font-weight: 600;
+          letter-spacing: 0.02em;
+        }
+
         .account-icon {
           font-size: 18px;
         }
 
         .account-text {
           font-weight: 500;
+        }
+
+        /* Mobile User Card */
+        .mobile-user-card {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 15px 20px;
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          border-radius: 12px;
+          margin-bottom: 8px;
+        }
+
+        .mobile-user-avatar {
+          width: 48px;
+          height: 48px;
+          background: white;
+          color: #059669;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 800;
+          font-size: 1rem;
+          flex-shrink: 0;
+        }
+
+        .mobile-user-info {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          flex: 1;
+        }
+
+        .mobile-user-name {
+          color: white;
+          font-weight: 700;
+          font-size: 1rem;
+          line-height: 1.3;
+        }
+
+        .mobile-logged-badge {
+          color: rgba(255, 255, 255, 0.9);
+          font-size: 0.8rem;
+          font-weight: 600;
         }
 
         /* Menu Toggle Button */
@@ -423,6 +640,12 @@ export default function Navbar() {
           border-radius: 8px;
           transition: all 0.3s ease;
           margin-bottom: 8px;
+          background: none;
+          border: none;
+          width: 100%;
+          text-align: left;
+          cursor: pointer;
+          font-family: inherit;
         }
 
         .mobile-nav-link:hover {
@@ -438,6 +661,15 @@ export default function Navbar() {
 
         .mobile-nav-link.active .nav-link-icon {
           color: #0369a1;
+        }
+
+        .mobile-nav-link.logout-btn {
+          color: #dc2626;
+          font-weight: 600;
+        }
+
+        .mobile-nav-link.logout-btn:hover {
+          background: #fee2e2;
         }
 
         .mobile-menu-divider {
@@ -473,11 +705,12 @@ export default function Navbar() {
             display: none;
           }
           
-          .account-text {
+          .user-info-nav {
             display: none;
           }
           
-          .account-button {
+          .account-button,
+          .account-button.logged-in {
             padding: 8px;
             border-radius: 50%;
             width: 40px;
@@ -486,10 +719,20 @@ export default function Navbar() {
             align-items: center;
             justify-content: center;
           }
+
+          .user-avatar-nav {
+            width: 28px;
+            height: 28px;
+            font-size: 0.75rem;
+          }
           
           .account-icon {
             font-size: 20px;
             margin: 0;
+          }
+
+          .account-text {
+            display: none;
           }
         }
 
