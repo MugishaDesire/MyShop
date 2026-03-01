@@ -65,7 +65,7 @@ export default function Navbar() {
       <nav className="navbar">
         <div className="nav-container">
           <Link to="/" className="logo">
-            <span className="logo-icon">🛍️</span>
+            
             <h1 className="logo-text">MyShop</h1>
           </Link>
           

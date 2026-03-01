@@ -288,7 +288,7 @@ export default function LoginForm({ onLogin }) {
             ← Back to Homepage
           </button>
           <div style={styles.supportLink}>
-            Need help? <a href="/support" style={styles.supportLinkAnchor}>Contact Support</a>
+            Need help? <a href="/contact" style={styles.supportLinkAnchor}>Contact Support</a>
           </div>
         </div>
       </div>
