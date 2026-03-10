@@ -110,10 +110,10 @@ export default function About() {
             <div className="team-grid">
               <div className="team-member">
                 <div className="member-avatar">👨‍💼</div>
-                <h3>Rwanamiza Chris</h3>
+                <h3>Yves IRAGUHA</h3>
                 <p className="member-role">CEO & Founder</p>
                 <p className="member-bio">
-                  With 5+ years in e-commerce, Alex founded MyShop with a vision 
+                  With 5+ years in e-commerce, Yves founded MyShop with a vision 
                   to make technology accessible to everyone.
                 </p>
               </div>
@@ -162,7 +162,7 @@ export default function About() {
 
         /* Hero Section */
         .hero-section {
-          background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+          background: linear-gradient(135deg, #3a3c42 0%, #4b515a 100%);
           padding: 4rem 2rem 3rem;
           text-align: center;
           color: white;
@@ -310,7 +310,7 @@ export default function About() {
         .image-placeholder {
           width: 100%;
           height: 400px;
-          background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+          background: linear-gradient(135deg, #3a2a5f 0%, #332053 100%);
           border-radius: 20px;
           display: flex;
           align-items: center;
@@ -348,7 +348,7 @@ export default function About() {
 
         .value-card:hover {
           transform: translateY(-8px);
-          border-color: #3b82f6;
+          border-color: #697fa3;
           box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
         }
 
@@ -406,7 +406,7 @@ export default function About() {
         .member-avatar {
           width: 80px;
           height: 80px;
-          background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+          background: linear-gradient(135deg, #3d4a60 0%, #535d79 100%);
           border-radius: 50%;
           display: flex;
           align-items: center;
@@ -440,7 +440,7 @@ export default function About() {
 
         /* CTA Section */
         .cta-section {
-          background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+          background: linear-gradient(135deg, #1a1c3e 0%, #1b1731 100%);
           border-radius: 24px;
           padding: 4rem;
           text-align: center;
@@ -497,7 +497,7 @@ export default function About() {
 
         .primary-button {
           background: white;
-          color: #0f766e;
+          color: #223836;
         }
 
         .primary-button:hover {

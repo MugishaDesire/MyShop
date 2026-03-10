@@ -2,47 +2,37 @@ import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
+const CATEGORIES = ["Electronics", "Fashion", "Food", "Art", "Beauty"];
+
 export default function AdminDashboard({ onLogout }) {
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [newItem, setNewItem] = useState({ name: "", price: "", stock: "", imageFile: null });
+  const [newItem, setNewItem] = useState({ name: "", price: "", stock: "", description: "", category: "", imageFile: null });
   const [editId, setEditId] = useState(null);
-  const [editItem, setEditItem] = useState({ name: "", price: "", stock: "", imageFile: null });
+  const [editItem, setEditItem] = useState({ name: "", price: "", stock: "", description: "", category: "", imageFile: null });
   const [activeTab, setActiveTab] = useState("products");
   const [loading, setLoading] = useState({ products: true, orders: true });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // ✅ Logout handler
   const handleLogout = () => {
     if (!window.confirm("Are you sure you want to logout?")) return;
-    // 1. Clear localStorage
-    localStorage.removeItem("authUser");
-    localStorage.removeItem("rememberedEmail");
-    // 2. Sync App state (clears authUser in App so /login won't redirect back to /admin)
+    sessionStorage.removeItem("adminVerified");
+    sessionStorage.removeItem("pendingAdminId");
     if (onLogout) onLogout();
-    // 3. Navigate to login
     navigate("/login", { replace: true });
   };
 
-  // Enrich orders with product information and calculate totals
   const enrichedOrders = useMemo(() => {
     return orders.map(order => {
       const product = products.find(p => p.id === order.product_id);
       const productPrice = product ? parseFloat(product.price) : 0;
       const quantity = parseInt(order.qty) || 1;
-      const total = productPrice * quantity;
-      return {
-        ...order,
-        productName: product ? product.name : `Product #${order.product_id}`,
-        productPrice: productPrice,
-        total: total
-      };
+      return { ...order, productName: product ? product.name : `Product #${order.product_id}`, productPrice, total: productPrice * quantity };
     });
   }, [orders, products]);
 
-  // Group orders by customer and location
   const groupedOrders = useMemo(() => {
     const orderGroups = {};
     enrichedOrders.forEach(order => {
@@ -50,32 +40,12 @@ export default function AdminDashboard({ onLogout }) {
       const timeKey = Math.floor(orderTime.getTime() / (60 * 1000));
       const groupKey = `${order.cust_phone}_${order.location}_${timeKey}`;
       if (!orderGroups[groupKey]) {
-        orderGroups[groupKey] = {
-          id: order.id,
-          cust_name: order.cust_name,
-          cust_phone: order.cust_phone,
-          cust_email: order.cust_email,
-          location: order.location,
-          status: order.status,
-          created_at: order.created_at || order.date,
-          items: [],
-          orderIds: []
-        };
+        orderGroups[groupKey] = { id: order.id, cust_name: order.cust_name, cust_phone: order.cust_phone, cust_email: order.cust_email, location: order.location, status: order.status, created_at: order.created_at || order.date, items: [], orderIds: [] };
       }
-      orderGroups[groupKey].items.push({
-        id: order.id,
-        productName: order.productName,
-        qty: order.qty,
-        price: order.productPrice,
-        subtotal: order.total
-      });
+      orderGroups[groupKey].items.push({ id: order.id, productName: order.productName, qty: order.qty, price: order.productPrice, subtotal: order.total });
       orderGroups[groupKey].orderIds.push(order.id);
       const statusPriority = { 'Delivered': 3, 'Paid': 2, 'Pending': 1 };
-      const currentPriority = statusPriority[orderGroups[groupKey].status] || 0;
-      const newPriority = statusPriority[order.status] || 0;
-      if (newPriority > currentPriority) {
-        orderGroups[groupKey].status = order.status;
-      }
+      if ((statusPriority[order.status] || 0) > (statusPriority[orderGroups[groupKey].status] || 0)) orderGroups[groupKey].status = order.status;
     });
     return Object.values(orderGroups).map(group => ({
       ...group,
@@ -84,9 +54,7 @@ export default function AdminDashboard({ onLogout }) {
     })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [enrichedOrders]);
 
-  const pendingOrders = useMemo(() => {
-    return groupedOrders.filter(o => o.status !== "Delivered" && o.status !== "Paid").length;
-  }, [groupedOrders]);
+  const pendingOrders = useMemo(() => groupedOrders.filter(o => o.status !== "Delivered" && o.status !== "Paid").length, [groupedOrders]);
 
   const salesByStatus = useMemo(() => {
     const stats = { total: 0, pending: 0, paid: 0, delivered: 0 };
@@ -100,23 +68,15 @@ export default function AdminDashboard({ onLogout }) {
   }, [groupedOrders]);
 
   const showMessage = (message, isError = false) => {
-    if (isError) {
-      setError(message);
-      setTimeout(() => setError(""), 3000);
-    } else {
-      setSuccess(message);
-      setTimeout(() => setSuccess(""), 3000);
-    }
+    if (isError) { setError(message); setTimeout(() => setError(""), 3000); }
+    else { setSuccess(message); setTimeout(() => setSuccess(""), 3000); }
   };
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading({ products: true, orders: true });
-        const [productsRes, ordersRes] = await Promise.all([
-          axios.get("http://localhost:5000/products"),
-          axios.get("http://localhost:5000/orders")
-        ]);
+        const [productsRes, ordersRes] = await Promise.all([axios.get("http://localhost:5000/products"), axios.get("http://localhost:5000/orders")]);
         setProducts(productsRes.data);
         setOrders(ordersRes.data);
         setLoading({ products: false, orders: false });
@@ -130,8 +90,8 @@ export default function AdminDashboard({ onLogout }) {
   }, []);
 
   const addProduct = async () => {
-    if (!newItem.name || !newItem.price || !newItem.stock) {
-      showMessage("Please fill in all required fields", true);
+    if (!newItem.name || !newItem.price || !newItem.stock || !newItem.category) {
+      showMessage("Please fill in all required fields including category", true);
       return;
     }
     try {
@@ -140,19 +100,11 @@ export default function AdminDashboard({ onLogout }) {
       formData.append("price", newItem.price);
       formData.append("description", newItem.description);
       formData.append("stock", Number(newItem.stock));
+      formData.append("category", newItem.category);
       if (newItem.imageFile) formData.append("image", newItem.imageFile);
-      const res = await axios.post("http://localhost:5000/products", formData, {
-        headers: { "Content-Type": "multipart/form-data" }
-      });
-      setProducts([...products, {
-        id: res.data.productId,
-        name: newItem.name,
-        price: newItem.price,
-        description: newItem.description,
-        stock: Number(newItem.stock),
-        image: res.data.image || null,
-      }]);
-      setNewItem({ name: "", price: "", description: "", stock: "", imageFile: null });
+      const res = await axios.post("http://localhost:5000/products", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      setProducts([...products, { id: res.data.productId, name: newItem.name, price: newItem.price, description: newItem.description, stock: Number(newItem.stock), category: newItem.category, image: res.data.image || null }]);
+      setNewItem({ name: "", price: "", stock: "", description: "", category: "", imageFile: null });
       showMessage("Product added successfully!");
     } catch (err) {
       console.error(err);
@@ -164,24 +116,18 @@ export default function AdminDashboard({ onLogout }) {
     if (!id) return showMessage("Invalid product ID", true);
     if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return;
     axios.delete(`http://localhost:5000/products/${id}`)
-      .then(() => {
-        setProducts(products.filter((p) => p.id !== id));
-        showMessage("Product deleted successfully!");
-      })
-      .catch((err) => {
-        console.error(err);
-        showMessage("Failed to delete product", true);
-      });
+      .then(() => { setProducts(products.filter((p) => p.id !== id)); showMessage("Product deleted successfully!"); })
+      .catch((err) => { console.error(err); showMessage("Failed to delete product", true); });
   };
 
   const startEdit = (product) => {
     setEditId(product.id);
-    setEditItem({ name: product.name, price: product.price, stock: product.stock, imageFile: null });
+    setEditItem({ name: product.name, price: product.price, stock: product.stock, description: product.description || "", category: product.category || "", imageFile: null });
   };
 
   const saveEdit = () => {
-    if (!editItem.name || !editItem.price || !editItem.stock) {
-      showMessage("Please fill in all required fields", true);
+    if (!editItem.name || !editItem.price || !editItem.stock || !editItem.category) {
+      showMessage("Please fill in all required fields including category", true);
       return;
     }
     const formData = new FormData();
@@ -189,233 +135,397 @@ export default function AdminDashboard({ onLogout }) {
     formData.append("price", editItem.price);
     formData.append("stock", editItem.stock);
     formData.append("description", editItem.description);
+    formData.append("category", editItem.category);
     if (editItem.imageFile) formData.append("image", editItem.imageFile);
-    axios.put(`http://localhost:5000/products/${editId}`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    })
+    axios.put(`http://localhost:5000/products/${editId}`, formData, { headers: { "Content-Type": "multipart/form-data" } })
       .then(() => {
-        setProducts(products.map((p) => p.id === editId ? { ...p, name: editItem.name, price: editItem.price, stock: editItem.stock } : p));
+        setProducts(products.map((p) => p.id === editId ? { ...p, name: editItem.name, price: editItem.price, stock: editItem.stock, description: editItem.description, category: editItem.category } : p));
         setEditId(null);
-        setEditItem({ name: "", price: "", stock: "", imageFile: null });
+        setEditItem({ name: "", price: "", stock: "", description: "", category: "", imageFile: null });
         showMessage("Product updated successfully!");
       })
-      .catch(err => {
-        console.error(err);
-        showMessage("Failed to update product", true);
-      });
+      .catch(err => { console.error(err); showMessage("Failed to update product", true); });
   };
 
   const updateOrderStatus = async (orderGroup, customerName) => {
     const itemCount = orderGroup.items.length;
     if (!window.confirm(`Update status for ${customerName}'s order (${itemCount} item${itemCount > 1 ? 's' : ''})?`)) return;
     try {
-      const updatePromises = orderGroup.orderIds.map(orderId =>
-        axios.patch(`http://localhost:5000/orders/${orderId}/status`)
-      );
-      const responses = await Promise.all(updatePromises);
+      const responses = await Promise.all(orderGroup.orderIds.map(orderId => axios.patch(`http://localhost:5000/orders/${orderId}/status`)));
       const newStatus = responses[0].data.status;
       setOrders(orders.map(o => orderGroup.orderIds.includes(o.id) ? { ...o, status: newStatus } : o));
       showMessage(`Order status updated to ${newStatus}!`);
-    } catch (err) {
-      console.error(err);
-      showMessage("Failed to update order status", true);
-    }
+    } catch (err) { console.error(err); showMessage("Failed to update order status", true); }
   };
 
-  // Get admin name from localStorage
-  const adminUser = (() => {
-    try { return JSON.parse(localStorage.getItem("authUser")); } catch { return null; }
-  })();
+  const adminUser = (() => { try { return JSON.parse(localStorage.getItem("authUser")); } catch { return null; } })();
 
   return (
     <>
-      <div className="dashboard">
-        <div className="header">
-          <div className="header-top">
-            <h1 className="title">Admin Dashboard</h1>
-            {/* ✅ Logout Button */}
-            <div className="admin-info">
-              {adminUser && (
-                <span className="admin-name">
-                  👤 {adminUser.name || adminUser.email || "Admin"}
-                </span>
-              )}
-              <button className="logout-btn" onClick={handleLogout}>
-                <span className="logout-icon">🚪</span>
-                Logout
-              </button>
+      <div className="dashboard-container">
+        {/* Header Section */}
+        <header className="dashboard-header">
+          <div className="header-content">
+            <div className="header-left">
+              <h1 className="dashboard-title">
+                <span className="title-icon">📊</span>
+                Admin Dashboard
+              </h1>
+              <div className="welcome-badge">
+                <span className="welcome-text">Welcome back,</span>
+                <span className="admin-name">{adminUser?.name || adminUser?.email || "Admin"}</span>
+              </div>
+            </div>
+            <button className="logout-button" onClick={handleLogout}>
+              <span className="logout-icon">🚪</span>
+              <span>Logout</span>
+            </button>
+          </div>
+
+          {/* Stats Cards */}
+          <div className="stats-grid">
+            <div className="stat-card products">
+              <div className="stat-icon">📦</div>
+              <div className="stat-content">
+                <span className="stat-label">Total Products</span>
+                <span className="stat-value">{products.length}</span>
+              </div>
+            </div>
+            <div className="stat-card orders">
+              <div className="stat-icon">📋</div>
+              <div className="stat-content">
+                <span className="stat-label">Total Orders</span>
+                <span className="stat-value">{groupedOrders.length}</span>
+              </div>
+            </div>
+            <div className="stat-card pending">
+              <div className="stat-icon">⏳</div>
+              <div className="stat-content">
+                <span className="stat-label">Pending Orders</span>
+                <span className="stat-value">{pendingOrders}</span>
+              </div>
             </div>
           </div>
-          <div className="stats">
-            <div className="stat-card">
-              <span className="stat-label">Total Products</span>
-              <span className="stat-value">{products.length}</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">Total Orders</span>
-              <span className="stat-value">{groupedOrders.length}</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">Pending Orders</span>
-              <span className="stat-value">{pendingOrders}</span>
-            </div>
+        </header>
+
+        {/* Notification Messages */}
+        {error && (
+          <div className="notification error">
+            <span className="notification-icon">⚠️</span>
+            <span>{error}</span>
           </div>
+        )}
+        {success && (
+          <div className="notification success">
+            <span className="notification-icon">✅</span>
+            <span>{success}</span>
+          </div>
+        )}
+
+        {/* Tab Navigation */}
+        <div className="tab-navigation">
+          <button 
+            className={`tab-button ${activeTab === "products" ? "active" : ""}`} 
+            onClick={() => setActiveTab("products")}
+          >
+            <span className="tab-icon">📦</span>
+            <span>Products</span>
+          </button>
+          <button 
+            className={`tab-button ${activeTab === "orders" ? "active" : ""}`} 
+            onClick={() => setActiveTab("orders")}
+          >
+            <span className="tab-icon">📋</span>
+            <span>Orders</span>
+          </button>
         </div>
 
-        {error && <div className="message error">{error}</div>}
-        {success && <div className="message success">{success}</div>}
-
-        <div className="tabs">
-          <button className={`tab ${activeTab === "products" ? "active" : ""}`} onClick={() => setActiveTab("products")}>
-            <span className="tab-icon">📦</span>Products
-          </button>
-          <button className={`tab ${activeTab === "orders" ? "active" : ""}`} onClick={() => setActiveTab("orders")}>
-            <span className="tab-icon">📋</span>Orders
-          </button>
-        </div>
-
+        {/* Products Tab Content */}
         {activeTab === "products" && (
-          <div className="form-card">
-            <h2 className="form-title"><span className="form-icon">➕</span>Add New Product</h2>
-            <div className="form-grid">
-              <div className="form-group">
-                <label htmlFor="productName">Product Name *</label>
-                <input id="productName" type="text" placeholder="Enter product name" value={newItem.name} onChange={(e) => setNewItem({ ...newItem, name: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="price">Price ($) *</label>
-                <input id="price" type="number" placeholder="0.00" min="0" step="0.01" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="description">Description</label>
-                <textarea id="description" placeholder="Enter product description" value={newItem.description} onChange={(e) => setNewItem({ ...newItem, description: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="stock">Stock Quantity *</label>
-                <input id="stock" type="number" placeholder="0" min="0" value={newItem.stock} onChange={(e) => setNewItem({ ...newItem, stock: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="image">Product Image</label>
-                <div className="file-input">
-                  <input id="image" type="file" accept="image/*" onChange={(e) => setNewItem({ ...newItem, imageFile: e.target.files[0] })} />
-                  <span className="file-name">{newItem.imageFile ? newItem.imageFile.name : "Choose file..."}</span>
+          <>
+            {/* Add Product Form */}
+            <div className="form-section">
+              <h2 className="section-header">
+                <span className="header-icon">➕</span>
+                Add New Product
+              </h2>
+              <div className="form-grid">
+                <div className="form-field">
+                  <label>Product Name <span className="required">*</span></label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Wireless Headphones" 
+                    value={newItem.name} 
+                    onChange={e => setNewItem({ ...newItem, name: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Price ($) <span className="required">*</span></label>
+                  <input 
+                    type="number" 
+                    placeholder="0.00" 
+                    min="0" 
+                    step="0.01" 
+                    value={newItem.price} 
+                    onChange={e => setNewItem({ ...newItem, price: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Stock Quantity <span className="required">*</span></label>
+                  <input 
+                    type="number" 
+                    placeholder="0" 
+                    min="0" 
+                    value={newItem.stock} 
+                    onChange={e => setNewItem({ ...newItem, stock: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Category <span className="required">*</span></label>
+                  <select 
+                    className="category-select" 
+                    value={newItem.category} 
+                    onChange={e => setNewItem({ ...newItem, category: e.target.value })}
+                  >
+                    <option value="">Select a category</option>
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-field full-width">
+                  <label>Description</label>
+                  <textarea 
+                    rows={3} 
+                    placeholder="Describe the product — features, materials, dimensions..." 
+                    value={newItem.description} 
+                    onChange={e => setNewItem({ ...newItem, description: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Product Image</label>
+                  <div className="file-upload">
+                    <input 
+                      type="file" 
+                      id="product-image" 
+                      accept="image/*" 
+                      onChange={e => setNewItem({ ...newItem, imageFile: e.target.files[0] })}
+                    />
+                    <label htmlFor="product-image" className="file-button">
+                      <span>📁 Choose File</span>
+                    </label>
+                    <span className="file-name">
+                      {newItem.imageFile ? newItem.imageFile.name : "No file chosen"}
+                    </span>
+                  </div>
                 </div>
               </div>
+              <button className="submit-button" onClick={addProduct}>
+                <span>➕</span>
+                Add Product
+              </button>
             </div>
-            <button className="primary-btn" onClick={addProduct}>Add Product</button>
-          </div>
-        )}
 
-        {activeTab === "products" && (
-          <div className="section">
-            <h2 className="section-title">Product List</h2>
-            {loading.products ? (
-              <div className="loading">Loading products...</div>
-            ) : products.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon">📦</span>
-                <p>No products found. Add your first product!</p>
-              </div>
-            ) : (
-              <div className="list">
-                {products.map((p) => (
-                  <div key={p.id} className="card product-card">
-                    {editId === p.id ? (
-                      <div className="edit-form">
-                        <h3>Edit Product</h3>
-                        <div className="edit-grid">
-                          <input type="text" placeholder="Product name" value={editItem.name} onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} />
-                          <input type="number" placeholder="Price" value={editItem.price} onChange={(e) => setEditItem({ ...editItem, price: e.target.value })} />
-                          <input type="number" placeholder="Stock" value={editItem.stock} onChange={(e) => setEditItem({ ...editItem, stock: e.target.value })} />
-                          <input type="file" accept="image/*" onChange={(e) => setEditItem({ ...editItem, imageFile: e.target.files[0] })} />
-                        </div>
-                        <div className="actions">
-                          <button onClick={saveEdit} className="save-btn">Save Changes</button>
-                          <button onClick={() => setEditId(null)} className="cancel-btn">Cancel</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="product-header">
-                          <div className="product-info">
-                            <h3 className="product-name">{p.name}</h3>
-                            <div className="product-meta">
-                              <span className="price">${parseFloat(p.price || 0).toFixed(2)}</span>
-                              <span className={`stock ${p.stock < 10 ? "low" : p.stock < 50 ? "medium" : "high"}`}>Stock: {p.stock}</span>
+            {/* Product List */}
+            <div className="list-section">
+              <h2 className="section-header">
+                <span className="header-icon">📋</span>
+                Product List
+              </h2>
+              
+              {loading.products ? (
+                <div className="loading-state">
+                  <div className="spinner"></div>
+                  <p>Loading products...</p>
+                </div>
+              ) : products.length === 0 ? (
+                <div className="empty-state">
+                  <span className="empty-icon">📦</span>
+                  <h3>No Products Found</h3>
+                  <p>Add your first product using the form above</p>
+                </div>
+              ) : (
+                <div className="product-grid">
+                  {products.map(p => (
+                    <div key={p.id} className="product-card">
+                      {editId === p.id ? (
+                        <div className="edit-form">
+                          <h3>Edit Product</h3>
+                          <div className="edit-grid">
+                            <input 
+                              type="text" 
+                              placeholder="Product name" 
+                              value={editItem.name} 
+                              onChange={e => setEditItem({ ...editItem, name: e.target.value })}
+                            />
+                            <input 
+                              type="number" 
+                              placeholder="Price" 
+                              value={editItem.price} 
+                              onChange={e => setEditItem({ ...editItem, price: e.target.value })}
+                            />
+                            <input 
+                              type="number" 
+                              placeholder="Stock" 
+                              value={editItem.stock} 
+                              onChange={e => setEditItem({ ...editItem, stock: e.target.value })}
+                            />
+                            <select 
+                              className="category-select" 
+                              value={editItem.category} 
+                              onChange={e => setEditItem({ ...editItem, category: e.target.value })}
+                            >
+                              <option value="">Select category</option>
+                              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <textarea 
+                              className="full-width"
+                              rows={2} 
+                              placeholder="Description" 
+                              value={editItem.description} 
+                              onChange={e => setEditItem({ ...editItem, description: e.target.value })}
+                            />
+                            <div className="file-upload full-width">
+                              <input 
+                                type="file" 
+                                id={`edit-image-${p.id}`} 
+                                accept="image/*" 
+                                onChange={e => setEditItem({ ...editItem, imageFile: e.target.files[0] })}
+                              />
+                              <label htmlFor={`edit-image-${p.id}`} className="file-button small">
+                                <span>📁 Change Image</span>
+                              </label>
+                              <span className="file-name">
+                                {editItem.imageFile ? editItem.imageFile.name : "No file chosen"}
+                              </span>
                             </div>
                           </div>
-                          {p.image && (
-                            <div className="product-image">
-                              <img src={`http://localhost:5000/uploads/${p.image}`} alt={p.name}
-                                onError={(e) => { e.target.src = "https://via.placeholder.com/80x80?text=No+Image"; e.target.onerror = null; }} />
+                          <div className="edit-actions">
+                            <button className="save-button" onClick={saveEdit}>Save Changes</button>
+                            <button className="cancel-button" onClick={() => setEditId(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="product-image-container">
+                            {p.image ? (
+                              <img 
+                                src={`http://localhost:5000/uploads/${p.image}`} 
+                                alt={p.name}
+                                onError={e => { 
+                                  e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 24 24' fill='%2394a3b8'%3E%3Crect width='24' height='24' rx='4' fill='%23e2e8f0'/%3E%3Ctext x='4' y='16' font-family='Arial' font-size='10' fill='%2364748b'%3ENo img%3C/text%3E%3C/svg%3E";
+                                }} 
+                              />
+                            ) : (
+                              <div className="no-image">📷</div>
+                            )}
+                          </div>
+                          <div className="product-details">
+                            <h3 className="product-title">{p.name}</h3>
+                            <div className="product-meta">
+                              <span className="product-price">${parseFloat(p.price || 0).toFixed(2)}</span>
+                              <span className={`stock-badge ${p.stock < 10 ? "low" : p.stock < 50 ? "medium" : "high"}`}>
+                                Stock: {p.stock}
+                              </span>
+                              {p.category && <span className="category-badge">{p.category}</span>}
                             </div>
-                          )}
-                        </div>
-                        <div className="actions">
-                          <button className="edit-btn" onClick={() => startEdit(p)}><span className="btn-icon">✏️</span>Edit</button>
-                          <button className="delete-btn" onClick={() => deleteProduct(p.id, p.name)}><span className="btn-icon">🗑️</span>Delete</button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                            {p.description && (
+                              <p className="product-description">
+                                {p.description.length > 60 ? p.description.slice(0, 60) + "..." : p.description}
+                              </p>
+                            )}
+                          </div>
+                          <div className="product-actions">
+                            <button className="action-button edit" onClick={() => startEdit(p)}>
+                              <span>✏️</span>
+                              Edit
+                            </button>
+                            <button className="action-button delete" onClick={() => deleteProduct(p.id, p.name)}>
+                              <span>🗑️</span>
+                              Delete
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         )}
 
+        {/* Orders Tab Content */}
         {activeTab === "orders" && (
-          <div className="section">
-            <h2 className="section-title">Recent Orders</h2>
+          <div className="list-section">
+            <h2 className="section-header">
+              <span className="header-icon">📋</span>
+              Recent Orders
+            </h2>
+            
             {loading.orders ? (
-              <div className="loading">Loading orders...</div>
+              <div className="loading-state">
+                <div className="spinner"></div>
+                <p>Loading orders...</p>
+              </div>
             ) : groupedOrders.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-icon">📋</span>
-                <p>No orders yet. Orders will appear here.</p>
+                <h3>No Orders Yet</h3>
+                <p>Orders will appear here when customers make purchases</p>
               </div>
             ) : (
-              <div className="list">
-                {groupedOrders.map((orderGroup) => (
-                  <div key={orderGroup.id} className="card order-card">
+              <div className="orders-list">
+                {groupedOrders.map(orderGroup => (
+                  <div key={orderGroup.id} className="order-card">
                     <div className="order-header">
-                      <div className="order-customer">
+                      <div className="customer-info">
                         <h3>{orderGroup.cust_name || 'Unknown Customer'}</h3>
                         <div className="customer-details">
-                          <span className="phone">📱 {orderGroup.cust_phone || 'N/A'}</span>
-                          {orderGroup.cust_email && <span className="email">✉️ {orderGroup.cust_email}</span>}
-                          <span className="location">📍 {orderGroup.location || 'N/A'}</span>
+                          <span>📱 {orderGroup.cust_phone || 'N/A'}</span>
+                          {orderGroup.cust_email && <span>✉️ {orderGroup.cust_email}</span>}
+                          <span>📍 {orderGroup.location || 'N/A'}</span>
                         </div>
                       </div>
-                      <div className="order-status">
-                        <span className={`status-badge ${(orderGroup.status || 'pending').toLowerCase()}`}>
+                      <div className="order-status-badge">
+                        <span className={`status ${(orderGroup.status || 'pending').toLowerCase()}`}>
                           {orderGroup.status || "Pending"}
                         </span>
                       </div>
                     </div>
-                    <div className="order-items">
+
+                    <div className="order-items-list">
                       <div className="items-header">
-                        <span className="items-count">{orderGroup.items.length} item{orderGroup.items.length > 1 ? 's' : ''}</span>
+                        <span>{orderGroup.items.length} Item{orderGroup.items.length > 1 ? 's' : ''}</span>
                       </div>
-                      {orderGroup.items.map((item) => (
+                      {orderGroup.items.map(item => (
                         <div key={item.id} className="order-item">
-                          <div className="item-details">
+                          <div className="item-info">
                             <span className="item-name">{item.productName}</span>
-                            <span className="item-qty">Qty: {item.qty}</span>
+                            <span className="item-quantity">x{item.qty}</span>
                           </div>
-                          <div className="item-pricing">
-                            <span className="item-unit-price">${item.price.toFixed(2)} each</span>
+                          <div className="item-total">
+                            <span className="item-price">${item.price.toFixed(2)}</span>
                             <span className="item-subtotal">${item.subtotal.toFixed(2)}</span>
                           </div>
                         </div>
                       ))}
                     </div>
+
                     <div className="order-footer">
                       <div className="order-total">
-                        <span className="total-label">Total Amount:</span>
-                        <strong className="total-amount">${orderGroup.totalAmount.toFixed(2)}</strong>
+                        <span>Total Amount:</span>
+                        <strong>${orderGroup.totalAmount.toFixed(2)}</strong>
                       </div>
-                      <button className="status-btn" onClick={() => updateOrderStatus(orderGroup, orderGroup.cust_name)}>Update Status</button>
+                      <button 
+                        className="update-status-button" 
+                        onClick={() => updateOrderStatus(orderGroup, orderGroup.cust_name)}
+                      >
+                        Update Status
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -424,471 +534,977 @@ export default function AdminDashboard({ onLogout }) {
           </div>
         )}
 
-        <div className="summary-card">
-          <h2 className="summary-title">💰 Total Revenue</h2>
-          <p className="summary-amount">${salesByStatus.total.toFixed(2)}</p>
-          <div className="revenue-breakdown">
-            <div className="breakdown-item pending">
-              <span className="breakdown-label">⏳ Pending</span>
-              <span className="breakdown-value">${salesByStatus.pending.toFixed(2)}</span>
+        {/* Revenue Summary */}
+        <div className="revenue-summary">
+          <h2 className="summary-header">
+            <span className="header-icon">💰</span>
+            Revenue Overview
+          </h2>
+          <div className="summary-content">
+            <div className="total-revenue">
+              <span className="revenue-label">Total Revenue</span>
+              <span className="revenue-amount">${salesByStatus.total.toFixed(2)}</span>
             </div>
-            <div className="breakdown-item paid">
-              <span className="breakdown-label">💳 Paid</span>
-              <span className="breakdown-value">${salesByStatus.paid.toFixed(2)}</span>
+            <div className="revenue-breakdown">
+              <div className="revenue-item pending">
+                <span>⏳ Pending</span>
+                <strong>${salesByStatus.pending.toFixed(2)}</strong>
+              </div>
+              <div className="revenue-item paid">
+                <span>💳 Paid</span>
+                <strong>${salesByStatus.paid.toFixed(2)}</strong>
+              </div>
+              <div className="revenue-item delivered">
+                <span>✅ Delivered</span>
+                <strong>${salesByStatus.delivered.toFixed(2)}</strong>
+              </div>
             </div>
-            <div className="breakdown-item delivered">
-              <span className="breakdown-label">✅ Delivered</span>
-              <span className="breakdown-value">${salesByStatus.delivered.toFixed(2)}</span>
+            <div className="orders-count">
+              From {groupedOrders.length} order{groupedOrders.length !== 1 ? 's' : ''}
             </div>
           </div>
-          <p className="summary-note">From {groupedOrders.length} order{groupedOrders.length !== 1 ? 's' : ''}</p>
         </div>
       </div>
 
       <style>{`
-        .dashboard { 
-          padding: 2rem;
-          max-width: 1200px;
-          margin: 0 auto;
-          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-          background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-          min-height: 100vh;
+        /* Global Styles */
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
         }
 
-        .header { margin-bottom: 2rem; }
+        .dashboard-container {
+          max-width: 1400px;
+          margin: 0 auto;
+          padding: 24px;
+          background: #f8fafc;
+          min-height: 100vh;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
 
-        /* ✅ New header-top for title + logout */
-        .header-top {
+        /* Header Styles */
+        .dashboard-header {
+          background: linear-gradient(135deg, #1e293b, #0f172a);
+          border-radius: 20px;
+          padding: 24px;
+          margin-bottom: 24px;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .header-content {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 1.5rem;
-          flex-wrap: wrap;
-          gap: 1rem;
+          margin-bottom: 24px;
         }
 
-        .title { 
-          font-size: 2.5rem;
-          font-weight: 800;
-          background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
+        .header-left {
+          display: flex;
+          align-items: center;
+          gap: 24px;
+        }
+
+        .dashboard-title {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          font-size: 28px;
+          font-weight: 700;
+          color: white;
           margin: 0;
         }
 
-        /* ✅ Admin info + logout */
-        .admin-info {
+        .title-icon {
+          font-size: 32px;
+        }
+
+        .welcome-badge {
           display: flex;
           align-items: center;
-          gap: 1rem;
+          gap: 8px;
+          background: rgba(255, 255, 255, 0.1);
+          padding: 8px 16px;
+          border-radius: 30px;
+          backdrop-filter: blur(10px);
+        }
+
+        .welcome-text {
+          color: #94a3b8;
+          font-size: 14px;
         }
 
         .admin-name {
-          font-size: 0.9rem;
+          color: white;
           font-weight: 600;
-          color: #475569;
-          background: white;
-          padding: 0.5rem 1rem;
-          border-radius: 8px;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.06);
-          border: 1px solid #e2e8f0;
+          font-size: 14px;
         }
 
-        .logout-btn {
+        .logout-button {
           display: flex;
           align-items: center;
-          gap: 0.5rem;
-          padding: 0.625rem 1.25rem;
-          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-size: 0.9rem;
+          gap: 8px;
+          background: rgba(239, 68, 68, 0.2);
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          color: #ef4444;
+          padding: 10px 20px;
+          border-radius: 12px;
           font-weight: 600;
+          font-size: 14px;
           cursor: pointer;
           transition: all 0.2s ease;
-          box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
         }
 
-        .logout-btn:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
-          background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+        .logout-button:hover {
+          background: #ef4444;
+          color: white;
+          transform: translateY(-2px);
+          box-shadow: 0 5px 15px rgba(239, 68, 68, 0.3);
         }
 
-        .logout-btn:active {
-          transform: translateY(0);
-        }
-
-        .logout-icon { font-size: 1rem; }
-
-        .stats {
+        /* Stats Grid */
+        .stats-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 1rem;
-          margin-bottom: 2rem;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 20px;
         }
 
         .stat-card {
-          background: white;
-          padding: 1.5rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-          text-align: center;
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          background: rgba(255, 255, 255, 0.1);
+          backdrop-filter: blur(10px);
+          padding: 20px;
+          border-radius: 16px;
           transition: transform 0.2s ease;
         }
 
-        .stat-card:hover { transform: translateY(-2px); }
+        .stat-card:hover {
+          transform: translateY(-2px);
+          background: rgba(255, 255, 255, 0.15);
+        }
+
+        .stat-icon {
+          font-size: 32px;
+        }
+
+        .stat-content {
+          display: flex;
+          flex-direction: column;
+        }
 
         .stat-label {
-          display: block;
-          color: #64748b;
-          font-size: 0.875rem;
-          font-weight: 600;
-          margin-bottom: 0.5rem;
+          color: #94a3b8;
+          font-size: 13px;
+          font-weight: 500;
           text-transform: uppercase;
-          letter-spacing: 0.05em;
+          letter-spacing: 0.5px;
         }
 
         .stat-value {
-          display: block;
-          font-size: 2rem;
-          font-weight: 800;
-          color: #1e293b;
+          color: white;
+          font-size: 32px;
+          font-weight: 700;
         }
 
-        .message {
-          padding: 1rem 1.5rem;
-          border-radius: 8px;
-          margin-bottom: 1.5rem;
-          font-weight: 500;
+        /* Notifications */
+        .notification {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 16px 20px;
+          border-radius: 12px;
+          margin-bottom: 20px;
           animation: slideIn 0.3s ease;
         }
 
         @keyframes slideIn {
-          from { transform: translateY(-10px); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
 
-        .error { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
-        .success { background: #dcfce7; color: #16a34a; border: 1px solid #bbf7d0; }
+        .notification.error {
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          color: #dc2626;
+        }
 
-        .tabs {
+        .notification.success {
+          background: #f0fdf4;
+          border: 1px solid #bbf7d0;
+          color: #16a34a;
+        }
+
+        .notification-icon {
+          font-size: 18px;
+        }
+
+        /* Tab Navigation */
+        .tab-navigation {
           display: flex;
-          gap: 0.5rem;
-          margin-bottom: 2rem;
+          gap: 10px;
+          margin-bottom: 24px;
           background: white;
-          padding: 0.5rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+          padding: 6px;
+          border-radius: 16px;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
 
-        .tab {
+        .tab-button {
           flex: 1;
-          padding: 1rem 1.5rem;
-          border: none;
-          border-radius: 8px;
-          cursor: pointer;
-          font-weight: 600;
-          font-size: 1rem;
-          background: transparent;
-          color: #64748b;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 0.5rem;
+          gap: 8px;
+          padding: 14px;
+          border: none;
+          border-radius: 12px;
+          font-weight: 600;
+          font-size: 15px;
+          color: #64748b;
+          background: transparent;
+          cursor: pointer;
           transition: all 0.2s ease;
         }
 
-        .tab:hover { background: #f1f5f9; color: #475569; }
-        .tab.active { background: #3b82f6; color: white; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
-
-        .form-card {
-          background: white;
-          padding: 2rem;
-          border-radius: 16px;
-          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
-          margin-bottom: 2rem;
-          border: 1px solid #e2e8f0;
+        .tab-button:hover {
+          background: #f1f5f9;
+          color: #1e293b;
         }
 
-        .form-title {
-          font-size: 1.5rem;
-          font-weight: 700;
-          color: #1e293b;
-          margin-bottom: 1.5rem;
+        .tab-button.active {
+          background: #3b82f6;
+          color: white;
+          box-shadow: 0 4px 10px rgba(59, 130, 246, 0.2);
+        }
+
+        .tab-icon {
+          font-size: 18px;
+        }
+
+        /* Section Headers */
+        .section-header {
           display: flex;
           align-items: center;
-          gap: 0.5rem;
+          gap: 10px;
+          font-size: 20px;
+          font-weight: 700;
+          color: #1e293b;
+          margin-bottom: 20px;
+        }
+
+        .header-icon {
+          font-size: 24px;
+        }
+
+        /* Form Styles */
+        .form-section {
+          background: white;
+          border-radius: 20px;
+          padding: 24px;
+          margin-bottom: 32px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+          border: 1px solid #e2e8f0;
         }
 
         .form-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 1rem;
-          margin-bottom: 1.5rem;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 20px;
+          margin-bottom: 24px;
         }
 
-        .form-group { display: flex; flex-direction: column; gap: 0.5rem; }
-        .form-group label { font-weight: 600; color: #475569; font-size: 0.875rem; }
-        .form-group input, .form-group textarea {
-          padding: 0.75rem 1rem;
-          border: 2px solid #e2e8f0;
-          border-radius: 8px;
-          font-size: 1rem;
-          transition: border-color 0.2s ease;
+        .form-field {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
         }
-        .form-group input:focus, .form-group textarea:focus {
+
+        .form-field.full-width {
+          grid-column: 1 / -1;
+        }
+
+        .form-field label {
+          font-weight: 600;
+          color: #475569;
+          font-size: 14px;
+        }
+
+        .required {
+          color: #ef4444;
+          margin-left: 4px;
+        }
+
+        .form-field input,
+        .form-field textarea,
+        .category-select {
+          padding: 12px 16px;
+          border: 2px solid #e2e8f0;
+          border-radius: 12px;
+          font-size: 14px;
+          transition: all 0.2s ease;
+          background: #f8fafc;
+        }
+
+        .form-field input:focus,
+        .form-field textarea:focus,
+        .category-select:focus {
           outline: none;
           border-color: #3b82f6;
+          background: white;
           box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
         }
 
-        .file-input { position: relative; overflow: hidden; }
-        .file-input input[type="file"] {
-          position: absolute;
-          left: 0; top: 0;
-          opacity: 0;
-          width: 100%; height: 100%;
+        .category-select {
+          appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-position: right 12px center;
+          background-color: #f8fafc;
+        }
+
+        /* File Upload */
+        .file-upload {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .file-upload input[type="file"] {
+          display: none;
+        }
+
+        .file-button {
+          background: #3b82f6;
+          color: white;
+          padding: 10px 16px;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 600;
           cursor: pointer;
+          transition: background 0.2s ease;
+          white-space: nowrap;
+        }
+
+        .file-button.small {
+          padding: 8px 12px;
+          font-size: 12px;
+        }
+
+        .file-button:hover {
+          background: #2563eb;
         }
 
         .file-name {
-          display: block;
-          padding: 0.75rem 1rem;
-          background: #f8fafc;
-          border: 2px solid #e2e8f0;
-          border-radius: 8px;
           color: #64748b;
-          font-size: 0.875rem;
+          font-size: 13px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
-        .primary-btn {
-          background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+        .submit-button {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          background: linear-gradient(135deg, #3b82f6, #2563eb);
           color: white;
-          padding: 0.875rem 2rem;
           border: none;
-          border-radius: 8px;
-          font-size: 1rem;
+          padding: 14px 24px;
+          border-radius: 12px;
           font-weight: 600;
+          font-size: 15px;
           cursor: pointer;
           transition: all 0.2s ease;
+          width: 100%;
         }
 
-        .primary-btn:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        .submit-button:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
         }
 
-        .section { margin-bottom: 2rem; }
-        .section-title { font-size: 1.5rem; font-weight: 700; color: #1e293b; margin-bottom: 1.5rem; }
-
-        .loading, .empty-state {
-          text-align: center;
-          padding: 4rem 2rem;
-          color: #64748b;
+        /* List Sections */
+        .list-section {
           background: white;
-          border-radius: 12px;
+          border-radius: 20px;
+          padding: 24px;
+          margin-bottom: 32px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+          border: 1px solid #e2e8f0;
+        }
+
+        /* Loading State */
+        .loading-state {
+          text-align: center;
+          padding: 60px;
+          color: #64748b;
+        }
+
+        .spinner {
+          width: 40px;
+          height: 40px;
+          border: 3px solid #e2e8f0;
+          border-top-color: #3b82f6;
+          border-radius: 50%;
+          margin: 0 auto 16px;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+
+        /* Empty State */
+        .empty-state {
+          text-align: center;
+          padding: 60px;
+          background: #f8fafc;
+          border-radius: 16px;
           border: 2px dashed #e2e8f0;
         }
 
-        .empty-icon { font-size: 3rem; display: block; margin-bottom: 1rem; }
-        .list { display: flex; flex-direction: column; gap: 1rem; }
+        .empty-icon {
+          font-size: 48px;
+          display: block;
+          margin-bottom: 16px;
+        }
 
-        .card {
+        .empty-state h3 {
+          color: #1e293b;
+          margin-bottom: 8px;
+        }
+
+        .empty-state p {
+          color: #64748b;
+        }
+
+        /* Product Grid */
+        .product-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+          gap: 20px;
+        }
+
+        .product-card {
+          background: #f8fafc;
+          border-radius: 16px;
+          padding: 20px;
+          border: 1px solid #e2e8f0;
+          transition: all 0.2s ease;
+        }
+
+        .product-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
+          border-color: #cbd5e1;
+        }
+
+        .product-image-container {
+          width: 100%;
+          height: 160px;
           background: white;
           border-radius: 12px;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-          border: 1px solid #e2e8f0;
           overflow: hidden;
-          transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .card:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1);
-        }
-
-        .product-card { padding: 1.5rem; }
-
-        .product-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 1rem;
-        }
-
-        .product-info { flex: 1; }
-        .product-name { font-size: 1.25rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
-        .product-meta { display: flex; gap: 1rem; align-items: center; }
-        .price { font-size: 1.125rem; font-weight: 700; color: #059669; }
-
-        .stock { padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 600; }
-        .stock.high { background: #dcfce7; color: #166534; }
-        .stock.medium { background: #fef3c7; color: #92400e; }
-        .stock.low { background: #fee2e2; color: #991b1b; }
-
-        .product-image { width: 80px; height: 80px; border-radius: 8px; overflow: hidden; border: 2px solid #e2e8f0; }
-        .product-image img { width: 100%; height: 100%; object-fit: cover; }
-
-        .actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
-
-        .edit-btn, .delete-btn, .save-btn, .cancel-btn, .status-btn {
-          padding: 0.5rem 1.25rem;
-          border-radius: 8px;
-          font-weight: 600;
-          font-size: 0.875rem;
-          cursor: pointer;
+          margin-bottom: 16px;
           display: flex;
           align-items: center;
-          gap: 0.375rem;
-          transition: all 0.2s ease;
-          border: none;
+          justify-content: center;
+          border: 1px solid #e2e8f0;
         }
 
-        .edit-btn { background: #dbeafe; color: #1d4ed8; }
-        .edit-btn:hover { background: #bfdbfe; }
-        .delete-btn { background: #fee2e2; color: #dc2626; }
-        .delete-btn:hover { background: #fecaca; }
-        .save-btn { background: #10b981; color: white; }
-        .save-btn:hover { background: #059669; }
-        .cancel-btn { background: #f1f5f9; color: #64748b; }
-        .cancel-btn:hover { background: #e2e8f0; }
+        .product-image-container img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
 
-        .edit-form { background: #f8fafc; border-radius: 8px; padding: 1.5rem; }
-        .edit-form h3 { margin-top: 0; margin-bottom: 1rem; color: #1e293b; }
+        .no-image {
+          font-size: 48px;
+          opacity: 0.3;
+        }
+
+        .product-details {
+          margin-bottom: 16px;
+        }
+
+        .product-title {
+          font-size: 18px;
+          font-weight: 700;
+          color: #1e293b;
+          margin-bottom: 8px;
+        }
+
+        .product-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+
+        .product-price {
+          font-size: 18px;
+          font-weight: 700;
+          color: #059669;
+        }
+
+        .stock-badge {
+          padding: 4px 10px;
+          border-radius: 30px;
+          font-size: 12px;
+          font-weight: 600;
+        }
+
+        .stock-badge.high {
+          background: #dcfce7;
+          color: #166534;
+        }
+
+        .stock-badge.medium {
+          background: #fef3c7;
+          color: #92400e;
+        }
+
+        .stock-badge.low {
+          background: #fee2e2;
+          color: #991b1b;
+        }
+
+        .category-badge {
+          background: #eff6ff;
+          color: #1d4ed8;
+          padding: 4px 10px;
+          border-radius: 30px;
+          font-size: 12px;
+          font-weight: 600;
+          border: 1px solid #bfdbfe;
+        }
+
+        .product-description {
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .product-actions {
+          display: flex;
+          gap: 10px;
+        }
+
+        .action-button {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          padding: 10px;
+          border: none;
+          border-radius: 10px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .action-button.edit {
+          background: #dbeafe;
+          color: #1d4ed8;
+        }
+
+        .action-button.edit:hover {
+          background: #bfdbfe;
+          transform: translateY(-1px);
+        }
+
+        .action-button.delete {
+          background: #fee2e2;
+          color: #dc2626;
+        }
+
+        .action-button.delete:hover {
+          background: #fecaca;
+          transform: translateY(-1px);
+        }
+
+        /* Edit Form */
+        .edit-form {
+          background: white;
+          border-radius: 12px;
+          padding: 16px;
+        }
+
+        .edit-form h3 {
+          margin-bottom: 16px;
+          color: #1e293b;
+          font-size: 16px;
+        }
 
         .edit-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-          gap: 1rem;
-          margin-bottom: 1rem;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-bottom: 16px;
         }
 
-        .edit-grid input { padding: 0.5rem; border: 2px solid #e2e8f0; border-radius: 6px; }
+        .edit-grid input,
+        .edit-grid select,
+        .edit-grid textarea {
+          padding: 10px;
+          border: 2px solid #e2e8f0;
+          border-radius: 8px;
+          font-size: 13px;
+        }
 
-        .order-card { padding: 1.5rem; }
+        .edit-actions {
+          display: flex;
+          gap: 10px;
+        }
+
+        .save-button,
+        .cancel-button {
+          flex: 1;
+          padding: 10px;
+          border: none;
+          border-radius: 8px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .save-button {
+          background: #10b981;
+          color: white;
+        }
+
+        .save-button:hover {
+          background: #059669;
+          transform: translateY(-1px);
+        }
+
+        .cancel-button {
+          background: #f1f5f9;
+          color: #64748b;
+        }
+
+        .cancel-button:hover {
+          background: #e2e8f0;
+          transform: translateY(-1px);
+        }
+
+        /* Orders List */
+        .orders-list {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .order-card {
+          background: #f8fafc;
+          border-radius: 16px;
+          padding: 20px;
+          border: 1px solid #e2e8f0;
+        }
 
         .order-header {
           display: flex;
           justify-content: space-between;
           align-items: flex-start;
-          margin-bottom: 1rem;
-          padding-bottom: 1rem;
-          border-bottom: 2px solid #f1f5f9;
+          padding-bottom: 16px;
+          border-bottom: 2px solid #e2e8f0;
+          margin-bottom: 16px;
         }
 
-        .order-customer h3 { font-size: 1.125rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
+        .customer-info h3 {
+          font-size: 16px;
+          font-weight: 700;
+          color: #1e293b;
+          margin-bottom: 8px;
+        }
 
-        .customer-details { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.875rem; color: #64748b; }
+        .customer-details {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 16px;
+          font-size: 13px;
+          color: #64748b;
+        }
 
-        .status-badge {
-          padding: 0.375rem 0.875rem;
-          border-radius: 9999px;
-          font-size: 0.75rem;
+        .order-status-badge .status {
+          display: inline-block;
+          padding: 6px 14px;
+          border-radius: 30px;
+          font-size: 12px;
           font-weight: 700;
           text-transform: uppercase;
-          letter-spacing: 0.05em;
+          letter-spacing: 0.5px;
         }
 
-        .status-badge.delivered { background: #dcfce7; color: #166534; }
-        .status-badge.paid { background: #fef3c7; color: #92400e; }
-        .status-badge.pending { background: #fee2e2; color: #991b1b; }
+        .status.delivered {
+          background: #dcfce7;
+          color: #166534;
+        }
 
-        .order-items { margin-bottom: 1rem; background: #f8fafc; padding: 1rem; border-radius: 8px; }
+        .status.paid {
+          background: #fef3c7;
+          color: #92400e;
+        }
 
-        .items-header { margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e2e8f0; }
-        .items-count { font-size: 0.875rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+        .status.pending {
+          background: #fee2e2;
+          color: #991b1b;
+        }
+
+        .order-items-list {
+          background: white;
+          border-radius: 12px;
+          padding: 12px;
+          margin-bottom: 16px;
+        }
+
+        .items-header {
+          padding: 8px 0;
+          border-bottom: 1px solid #e2e8f0;
+          margin-bottom: 8px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #64748b;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
 
         .order-item {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 0.75rem;
-          background: white;
-          border-radius: 6px;
-          margin-bottom: 0.5rem;
-          border: 1px solid #e2e8f0;
+          padding: 8px 0;
+          border-bottom: 1px solid #e2e8f0;
         }
 
-        .order-item:last-child { margin-bottom: 0; }
-        .item-details { display: flex; flex-direction: column; gap: 0.25rem; }
-        .item-name { font-weight: 600; color: #1e293b; }
-        .item-qty { font-size: 0.875rem; color: #64748b; }
-        .item-pricing { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; }
-        .item-unit-price { font-size: 0.875rem; color: #64748b; }
-        .item-subtotal { font-weight: 600; color: #059669; font-size: 1rem; }
+        .order-item:last-child {
+          border-bottom: none;
+        }
+
+        .item-info {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .item-name {
+          font-weight: 600;
+          color: #1e293b;
+          font-size: 14px;
+        }
+
+        .item-quantity {
+          color: #64748b;
+          font-size: 12px;
+        }
+
+        .item-total {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+        }
+
+        .item-price {
+          color: #64748b;
+          font-size: 12px;
+        }
+
+        .item-subtotal {
+          font-weight: 700;
+          color: #059669;
+          font-size: 14px;
+        }
 
         .order-footer {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding-top: 1rem;
-          border-top: 2px solid #f1f5f9;
         }
 
-        .order-total { display: flex; flex-direction: column; gap: 0.25rem; }
-        .total-label { font-size: 0.875rem; color: #64748b; font-weight: 600; }
-        .total-amount { font-size: 1.5rem; font-weight: 800; color: #1e293b; }
+        .order-total {
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+        }
 
-        .status-btn {
-          background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+        .order-total span {
+          color: #64748b;
+          font-size: 14px;
+        }
+
+        .order-total strong {
+          font-size: 20px;
+          font-weight: 800;
+          color: #1e293b;
+        }
+
+        .update-status-button {
+          background: linear-gradient(135deg, #8b5cf6, #7c3aed);
           color: white;
-          padding: 0.5rem 1.5rem;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 10px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+          transition: all 0.2s ease;
         }
 
-        .status-btn:hover {
+        .update-status-button:hover {
           transform: translateY(-1px);
-          box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+          box-shadow: 0 5px 15px rgba(139, 92, 246, 0.3);
         }
 
-        .summary-card {
-          background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+        /* Revenue Summary */
+        .revenue-summary {
+          background: linear-gradient(135deg, #0f172a, #1e293b);
+          border-radius: 20px;
+          padding: 24px;
           color: white;
-          padding: 2rem;
-          border-radius: 16px;
-          text-align: center;
-          margin-top: 2rem;
         }
 
-        .summary-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; }
-        .summary-amount { font-size: 3rem; font-weight: 800; margin-bottom: 1.5rem; }
+        .summary-header {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 18px;
+          margin-bottom: 20px;
+        }
+
+        .summary-content {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+
+        .total-revenue {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 16px;
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 16px;
+        }
+
+        .revenue-label {
+          font-size: 14px;
+          opacity: 0.8;
+        }
+
+        .revenue-amount {
+          font-size: 32px;
+          font-weight: 800;
+        }
 
         .revenue-breakdown {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
-          gap: 1rem;
-          margin-bottom: 1.5rem;
-          padding: 1.5rem;
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 12px;
-          backdrop-filter: blur(10px);
+          gap: 12px;
         }
 
-        .breakdown-item {
+        .revenue-item {
           display: flex;
           flex-direction: column;
-          gap: 0.5rem;
-          padding: 1rem;
-          background: rgba(255, 255, 255, 0.15);
-          border-radius: 8px;
-          transition: all 0.2s ease;
+          gap: 6px;
+          padding: 16px;
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 12px;
+          text-align: center;
+          transition: transform 0.2s ease;
         }
 
-        .breakdown-item:hover { background: rgba(255, 255, 255, 0.25); transform: translateY(-2px); }
-        .breakdown-label { font-size: 0.875rem; opacity: 0.9; font-weight: 600; }
-        .breakdown-value { font-size: 1.5rem; font-weight: 800; }
-        .summary-note { opacity: 0.9; font-size: 0.875rem; }
-        .btn-icon { font-size: 0.875rem; }
+        .revenue-item:hover {
+          transform: translateY(-2px);
+          background: rgba(255, 255, 255, 0.15);
+        }
+
+        .revenue-item span {
+          font-size: 12px;
+          opacity: 0.8;
+        }
+
+        .revenue-item strong {
+          font-size: 18px;
+          font-weight: 700;
+        }
+
+        .revenue-item.pending strong { color: #fbbf24; }
+        .revenue-item.paid strong { color: #60a5fa; }
+        .revenue-item.delivered strong { color: #34d399; }
+
+        .orders-count {
+          text-align: center;
+          font-size: 13px;
+          opacity: 0.7;
+          padding-top: 12px;
+          border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+          .stats-grid {
+            grid-template-columns: repeat(3, 1fr);
+          }
+        }
 
         @media (max-width: 768px) {
-          .header-top { flex-direction: column; align-items: flex-start; }
-          .title { font-size: 1.75rem; }
-          .order-footer { flex-direction: column; gap: 1rem; align-items: stretch; }
-          .order-total { align-items: center; }
-          .status-btn { width: 100%; }
-          .revenue-breakdown { grid-template-columns: 1fr; }
+          .dashboard-container {
+            padding: 16px;
+          }
+
+          .header-content {
+            flex-direction: column;
+            gap: 16px;
+            align-items: flex-start;
+          }
+
+          .header-left {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 12px;
+          }
+
+          .stats-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .revenue-breakdown {
+            grid-template-columns: 1fr;
+          }
+
+          .order-footer {
+            flex-direction: column;
+            gap: 16px;
+          }
+
+          .order-total {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .update-status-button {
+            width: 100%;
+          }
+
+          .product-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .edit-grid {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </>

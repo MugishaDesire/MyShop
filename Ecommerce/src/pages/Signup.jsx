@@ -145,7 +145,7 @@ export default function Signup() {
           <div className="brand-content">
             <div className="logo">
               <span className="logo-icon">⚡</span>
-              <span className="logo-text">FlowSpace</span>
+              <span className="logo-text">MyShop</span>
             </div>
             <h1>Join Us Today!</h1>
             <p>Create an account and start your journey with us</p>
@@ -345,7 +345,7 @@ export default function Signup() {
 
         body {
           font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: linear-gradient(135deg, #ecedf2 0%, #ffffff 100%);
           min-height: 100vh;
         }
 
@@ -375,7 +375,7 @@ export default function Signup() {
         /* Left side - Branding */
         .signup-branding {
           flex: 1;
-          background: linear-gradient(145deg, #6B46C1 0%, #9F7AEA 100%);
+          background: linear-gradient(145deg, #453767 0%, #252328 100%);
           color: white;
           padding: 3rem 2rem;
           display: flex;

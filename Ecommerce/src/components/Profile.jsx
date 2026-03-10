@@ -208,7 +208,7 @@ export default function Profile() {
                 ← Dashboard
               </Link>
             </div>
-            <div className="nav-brand">⚡ FlowSpace</div>
+            <div className="nav-brand">⚡ MyShop</div>
             <div className="nav-right">
               <button onClick={handleLogout} className="nav-logout">
                 Sign Out

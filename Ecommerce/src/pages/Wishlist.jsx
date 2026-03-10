@@ -140,7 +140,7 @@ export default function Wishlist() {
         <nav className="wl-nav">
           <div className="wl-nav-inner">
             <Link to="/userdashboard" className="wl-nav-back">← Dashboard</Link>
-            <div className="wl-nav-brand">⚡ FlowSpace</div>
+            <div className="wl-nav-brand">⚡ MyShop</div>
             <div className="wl-nav-right">
               <Link to="/userdashboard" className="wl-cart-link">
                 🛒

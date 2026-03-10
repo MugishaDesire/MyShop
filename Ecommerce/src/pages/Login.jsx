@@ -14,7 +14,7 @@ export default function LoginForm({ onLogin }) {
   const navigate = useNavigate();
 
   const DEMO_CREDENTIALS = {
-    email: "mugisha@gmail.com",
+    email: "mugishadf08@gmail.com",
     password: "Password123"
   };
 
@@ -63,30 +63,13 @@ export default function LoginForm({ onLogin }) {
       console.log("Login response:", response.data); // DEBUG — remove after confirming
 
       // ✅ DEFENSIVE: handle both { user: {...} } and { id, email, ... } response shapes
-      const user = response.data.admin ?? response.data.user ?? response.data;
+      // OTP was sent — store adminId temporarily, don't log in yet
+      const adminId = response.data.adminId;
+      sessionStorage.setItem("pendingAdminId", adminId);
+      sessionStorage.setItem("adminVerified", "false");
 
-      // ✅ Validate we actually got something real before storing
-      if (!user || typeof user !== "object" || Object.keys(user).length === 0) {
-        setError("Login failed: unexpected server response. Please contact support.");
-        setLoading(false);
-        return;
-      }
-
-      // ✅ Store in localStorage FIRST — before any state updates or navigation
-      localStorage.setItem("authUser", JSON.stringify(user));
-
-      // ✅ Handle remember me
-      if (rememberMe) {
-        localStorage.setItem("rememberedEmail", formData.email);
-      } else {
-        localStorage.removeItem("rememberedEmail");
-      }
-
-      // ✅ Sync parent App state (for Navbar etc.) — AFTER storage is set
-      if (onLogin) onLogin(user);
-
-      // ✅ Navigate LAST — using replace so back button doesn't return to login
-      navigate("/admin", { replace: true });
+      // Navigate to OTP verification page instead of dashboard
+      navigate("/verify-otp", { replace: true });
 
     } catch (err) {
       console.error("Login error:", err);

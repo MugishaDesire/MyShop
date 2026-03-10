@@ -14,4 +14,7 @@ router.post("/:productId", orderController.createOrder);
 // Update order status
 router.patch("/:id/status", orderController.updateOrderStatus);
 
+//get order by id
+router.get("/user/:userId", orderController.getOrdersByUserId);
+
 module.exports = router;

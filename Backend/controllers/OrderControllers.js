@@ -2,7 +2,7 @@ const db = require("../config/db");
 
 /**
  * GET /orders
- * Fetch all orders
+ * Fetch all orders (admin use)
  */
 exports.getOrders = async (req, res) => {
   try {
@@ -16,9 +16,31 @@ exports.getOrders = async (req, res) => {
 };
 
 /**
+ * GET /orders/user/:userId
+ * Fetch orders for a specific user by user ID
+ */
+exports.getOrdersByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ message: "User ID required" });
+    }
+
+    const [orders] = await db.query(
+      "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC",
+      [userId]
+    );
+
+    res.json(orders);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
  * POST /orders/:productId
  * Create a new order (single product)
- * This endpoint is used for both single-item orders and multi-item checkout
  */
 exports.createOrder = async (req, res) => {
   const connection = await db.getConnection();
@@ -32,17 +54,15 @@ exports.createOrder = async (req, res) => {
       qty,
       location,
       status,
-      date,
+      user_id,        // NEW
     } = req.body;
 
-    // Basic validation
     if (!cust_name || !cust_phone || !qty || !location) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
     await connection.beginTransaction();
 
-    // Check product stock
     const [products] = await connection.query(
       "SELECT stock, name FROM products WHERE id = ?",
       [productId]
@@ -55,18 +75,18 @@ exports.createOrder = async (req, res) => {
 
     if (products[0].stock < qty) {
       await connection.rollback();
-      return res.status(400).json({ 
-        message: `Insufficient stock for ${products[0].name}. Only ${products[0].stock} available.` 
+      return res.status(400).json({
+        message: `Insufficient stock for ${products[0].name}. Only ${products[0].stock} available.`,
       });
     }
 
-    // Insert order
     const [orderResult] = await connection.query(
       `INSERT INTO orders 
-       (product_id, cust_name, cust_phone, cust_email, qty, location, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (product_id, user_id, cust_name, cust_phone, cust_email, qty, location, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         productId,
+        user_id || null,      // NEW
         cust_name,
         cust_phone,
         cust_email || null,
@@ -76,7 +96,6 @@ exports.createOrder = async (req, res) => {
       ]
     );
 
-    // Reduce product stock
     await connection.query(
       "UPDATE products SET stock = stock - ? WHERE id = ?",
       [qty, productId]
@@ -88,7 +107,6 @@ exports.createOrder = async (req, res) => {
       message: "Order created successfully",
       orderId: orderResult.insertId,
     });
-
   } catch (error) {
     await connection.rollback();
     console.error("Order creation error:", error);
@@ -107,15 +125,15 @@ exports.createBatchOrders = async (req, res) => {
 
   try {
     const {
-      items, // Array of { productId, qty }
+      items,
       cust_name,
       cust_phone,
       cust_email,
       location,
       status,
+      user_id,        // NEW
     } = req.body;
 
-    // Validation
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: "No items provided" });
     }
@@ -137,10 +155,7 @@ exports.createBatchOrders = async (req, res) => {
       );
 
       if (!products.length) {
-        stockIssues.push({
-          productId: item.productId,
-          issue: "Product not found"
-        });
+        stockIssues.push({ productId: item.productId, issue: "Product not found" });
         continue;
       }
 
@@ -150,29 +165,25 @@ exports.createBatchOrders = async (req, res) => {
           productName: products[0].name,
           requested: item.qty,
           available: products[0].stock,
-          issue: `Insufficient stock`
+          issue: "Insufficient stock",
         });
       }
     }
 
-    // If there are any stock issues, rollback and return error
     if (stockIssues.length > 0) {
       await connection.rollback();
-      return res.status(400).json({
-        message: "Stock issues found",
-        issues: stockIssues
-      });
+      return res.status(400).json({ message: "Stock issues found", issues: stockIssues });
     }
 
-    // Create orders and update stock for each item
+    // Create orders and update stock
     for (const item of items) {
-      // Insert order
       const [orderResult] = await connection.query(
         `INSERT INTO orders 
-         (product_id, cust_name, cust_phone, cust_email, qty, location, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (product_id, user_id, cust_name, cust_phone, cust_email, qty, location, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           item.productId,
+          user_id || null,      // NEW
           cust_name,
           cust_phone,
           cust_email || null,
@@ -182,7 +193,6 @@ exports.createBatchOrders = async (req, res) => {
         ]
       );
 
-      // Reduce product stock
       await connection.query(
         "UPDATE products SET stock = stock - ? WHERE id = ?",
         [item.qty, item.productId]
@@ -191,7 +201,7 @@ exports.createBatchOrders = async (req, res) => {
       createdOrders.push({
         orderId: orderResult.insertId,
         productId: item.productId,
-        quantity: item.qty
+        quantity: item.qty,
       });
     }
 
@@ -200,9 +210,8 @@ exports.createBatchOrders = async (req, res) => {
     res.status(201).json({
       message: "Orders created successfully",
       orders: createdOrders,
-      totalOrders: createdOrders.length
+      totalOrders: createdOrders.length,
     });
-
   } catch (error) {
     await connection.rollback();
     console.error("Batch order creation error:", error);
@@ -214,7 +223,7 @@ exports.createBatchOrders = async (req, res) => {
 
 /**
  * PATCH /orders/:id/status
- * Update order status (Pending → Paid → Delivered)
+ * Update order status (Pending -> Paid -> Delivered)
  */
 exports.updateOrderStatus = async (req, res) => {
   try {
@@ -238,17 +247,59 @@ exports.updateOrderStatus = async (req, res) => {
         ? "Delivered"
         : "Delivered";
 
-    await db.query(
-      "UPDATE orders SET status = ? WHERE id = ?",
-      [nextStatus, id]
-    );
+    await db.query("UPDATE orders SET status = ? WHERE id = ?", [nextStatus, id]);
 
     res.json({
       message: "Order status updated",
       status: nextStatus,
     });
-
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * DELETE /orders/:id
+ * Delete an order by ID (admin use)
+ */
+exports.deleteOrder = async (req, res) => {
+  const connection = await db.getConnection();
+
+  try {
+    const { id } = req.params;
+
+    await connection.beginTransaction();
+
+    const [orders] = await connection.query(
+      "SELECT * FROM orders WHERE id = ?",
+      [id]
+    );
+
+    if (!orders.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const order = orders[0];
+
+    // Restore stock only for non-delivered orders
+    if (order.status !== "Delivered") {
+      await connection.query(
+        "UPDATE products SET stock = stock + ? WHERE id = ?",
+        [order.qty, order.product_id]
+      );
+    }
+
+    await connection.query("DELETE FROM orders WHERE id = ?", [id]);
+
+    await connection.commit();
+
+    res.json({ message: "Order deleted successfully" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Delete order error:", error);
+    res.status(500).json({ message: "Failed to delete order" });
+  } finally {
+    connection.release();
   }
 };
