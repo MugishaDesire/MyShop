@@ -304,7 +304,16 @@ export default function Wishlist() {
               <span>🛒 {totalItemsInCart} item{totalItemsInCart !== 1 ? "s" : ""} in your cart</span>
               <button
                 className="cta-checkout"
-                onClick={() => navigate("/checkout", { state: { cart, user } })}
+                onClick={() => {
+                  if (!user) {
+                    localStorage.setItem("shoppingCart", JSON.stringify(cart));
+                    localStorage.setItem("redirectAfterLogin", "checkout");
+                    navigate("/ulogin", { state: { from: "checkout" } });
+                  } else {
+                    localStorage.setItem("shoppingCart", JSON.stringify(cart));
+                    navigate("/checkout", { state: { cart, user } });
+                  }
+                }}
               >
                 Checkout Now →
               </button>

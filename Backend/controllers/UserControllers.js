@@ -15,13 +15,18 @@ const transporter = nodemailer.createTransport({
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, role } = req.body;
 
     if (!email || !password)
       return res.status(400).json({ message: "Email and password are required" });
 
+    // ✅ role must be user or courier
+    const allowedRoles = ["user", "courier"];
+    if (role && !allowedRoles.includes(role))
+      return res.status(400).json({ message: "Invalid role" });
+
     const [users] = await db.query(
-      "SELECT id, fullname, phonenumber, email, password FROM users WHERE email = ?",
+      "SELECT id, fullname, phonenumber, email, password, role FROM users WHERE email = ?",
       [email]
     );
 
@@ -33,13 +38,21 @@ exports.login = async (req, res) => {
     if (!isMatch)
       return res.status(401).json({ message: "Invalid email or password" });
 
+    // ✅ If role was selected on login, verify it matches the user's role in DB
+    if (role && user.role !== role) {
+      return res.status(403).json({
+        message: `This account is not registered as a ${role}. Please select the correct role.`,
+      });
+    }
+
     res.status(200).json({
       message: "Login successful",
       user: {
-        id: user.id,
-        fullname: user.fullname,
+        id:          user.id,
+        fullname:    user.fullname,
         phonenumber: user.phonenumber,
-        email: user.email,
+        email:       user.email,
+        role:        user.role, // ✅ send role to frontend
       },
     });
   } catch (error) {
@@ -64,9 +77,10 @@ exports.registerUser = async (req, res) => {
       return res.status(409).json({ message: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
+
     await db.query(
-      "INSERT INTO users (fullname, phonenumber, email, password) VALUES (?, ?, ?, ?)",
-      [fullname, phonenumber, email, hashedPassword]
+      "INSERT INTO users (fullname, phonenumber, email, password, role) VALUES (?, ?, ?, ?, ?)",
+      [fullname, phonenumber, email, hashedPassword, "user"] // ✅ always user on self-register
     );
 
     res.status(201).json({ success: true, message: "User created successfully" });
@@ -318,6 +332,102 @@ exports.resetPassword = async (req, res) => {
     res.status(200).json({ message: "Password reset successfully" });
   } catch (error) {
     console.error("Reset password error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ── CREATE COURIER (admin only) ───────────────────────────────────────────────
+exports.createCourier = async (req, res) => {
+  try {
+    const { fullname, phonenumber, email, password } = req.body;
+
+    if (!fullname || !email || !phonenumber || !password)
+      return res.status(400).json({ message: "All fields are required" });
+
+    const [existing] = await db.query(
+      "SELECT id FROM users WHERE email = ?",
+      [email]
+    );
+    if (existing.length)
+      return res.status(409).json({ message: "Email already in use" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const [result] = await db.query(
+      "INSERT INTO users (fullname , email, phonenumber, password, role) VALUES (?, ?, ?, ?, ?)",
+      [fullname, email, phonenumber, hashedPassword, "courier"] // ✅ role = courier
+    );
+
+    res.status(201).json({
+      message: "Courier account created successfully",
+      courierId: result.insertId,
+    });
+  } catch (error) {
+    console.error("Create courier error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ── GET ALL COURIERS ──────────────────────────────────────────────────────────
+exports.getAllCouriers = async (req, res) => {
+  try {
+    const [couriers] = await db.query(
+      `SELECT id, fullname, phonenumber, email, latitude, longitude, last_location_update
+       FROM users WHERE role = 'courier' ORDER BY fullname ASC`
+    );
+    res.status(200).json({ couriers });
+  } catch (error) {
+    console.error("Get couriers error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ── UPDATE COURIER LIVE LOCATION ──────────────────────────────────────────────
+exports.updateCourierLocation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { latitude, longitude } = req.body;
+
+    if (!latitude || !longitude)
+      return res.status(400).json({ message: "Latitude and longitude are required" });
+
+    await db.query(
+      `UPDATE users 
+       SET latitude = ?, longitude = ?, last_location_update = NOW() 
+       WHERE id = ? AND role = 'courier'`,
+      [latitude, longitude, id]
+    );
+
+    res.status(200).json({ message: "Location updated successfully" });
+  } catch (error) {
+    console.error("Update location error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ── DELETE COURIER ────────────────────────────────────────────────────────────
+exports.deleteCourier = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [couriers] = await db.query(
+      "SELECT id FROM users WHERE id = ? AND role = 'courier'",
+      [id]
+    );
+    if (!couriers.length)
+      return res.status(404).json({ message: "Courier not found" });
+
+    // Unassign any orders before deleting
+    await db.query(
+      "UPDATE orders SET courier_id = NULL, delivery_status = 'pending' WHERE courier_id = ?",
+      [id]
+    );
+
+    await db.query("DELETE FROM users WHERE id = ?", [id]);
+
+    res.status(200).json({ message: "Courier deleted successfully" });
+  } catch (error) {
+    console.error("Delete courier error:", error);
     res.status(500).json({ message: "Server error" });
   }
 };

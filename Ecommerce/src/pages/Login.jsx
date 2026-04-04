@@ -80,11 +80,11 @@ export default function LoginForm({ onLogin }) {
           case 401: errorMessage = "Invalid email or password. Please check your credentials."; break;
           case 403: errorMessage = "Access denied. Please contact your administrator."; break;
           case 404: errorMessage = "Service unavailable. Please try again later."; break;
-          case 500: errorMessage = "Server error. Please try again in a few moments."; break;
+          case 500: errorMessage = "Network error. Please check your internet connection."; break;
           default:  errorMessage = err.response.data?.message || errorMessage;
         }
       } else if (err.request) {
-        errorMessage = "Network error. Please check your internet connection.";
+        errorMessage = "Server error. Please try again in a few moments.";
       }
 
       setError(errorMessage);

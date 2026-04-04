@@ -130,7 +130,7 @@ export default function UserDashboard() {
     setTimeout(() => { el.classList.remove("show"); setTimeout(() => document.body.removeChild(el), 300); }, 3000);
   };
 
-  const handleLogout = () => { localStorage.removeItem("user"); window.location.href = "/"; };
+  const handleLogout = () => { localStorage.removeItem("user"); window.location.href = "/ulogin"; };
   const getStatusColor = (status = "") => {
     switch (status.toLowerCase()) {
       case "delivered": return { bg: "#d1fae5", text: "#059669" };
@@ -231,7 +231,7 @@ export default function UserDashboard() {
           <div className="ud-welcome-stats">
             {[
               { val: stats.totalOrders,              label: "Total Orders" },
-              { val: `$${stats.totalSpent.toFixed(2)}`, label: "Total Spent" },
+              { val: `$${stats.totalSpent.toFixed()}`, label: "Total Spent" },
               { val: stats.pendingOrders,             label: "Pending" },
             ].map((s, i) => (
               <div key={i} className="ud-wstat">
@@ -265,7 +265,10 @@ export default function UserDashboard() {
               <div className="ud-stats-grid">
                 {[
                   { icon: "📦", value: stats.totalOrders,                 label: "Total Orders" },
-                  { icon: "💰", value: `$${stats.totalSpent.toFixed(2)}`, label: "Total Spent" },
+                  { icon: "💰", value: `$${stats.totalSpent.toFixed(
+
+
+                  )}`, label: "Total Spent" },
                   { icon: "⏳", value: stats.pendingOrders,               label: "Pending Orders" },
                   { icon: "📊", value: stats.totalItems,                  label: "Items Purchased" },
                 ].map((s, i) => (

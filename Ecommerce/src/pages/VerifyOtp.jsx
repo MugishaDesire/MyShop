@@ -205,7 +205,7 @@ export default function VerifyOtp({ onLogin }) {
             <div style={styles.iconRing}></div>
           </div>
           
-          <h2 style={styles.title}>Verify your email</h2>
+          <h2 style={styles.title}>Verify OTP</h2>
           <p style={styles.subtitle}>
             Enter the 6-digit code sent to your email address
           </p>

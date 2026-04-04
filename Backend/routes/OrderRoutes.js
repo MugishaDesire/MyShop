@@ -2,19 +2,16 @@ const express = require("express");
 const router = express.Router();
 const orderController = require("../controllers/OrderControllers");
 
-// Get all orders
-router.get("/", orderController.getOrders);
+router.get("/",                   orderController.getOrders);
+router.post("/batch",             orderController.createBatchOrders);
+router.post("/:productId",        orderController.createOrder);
+router.patch("/:id/status",       orderController.updateOrderStatus);
+router.get("/user/:userId",       orderController.getOrdersByUserId);
+router.patch("/payment/:ref",     orderController.updateOrderByPaymentRef);
 
-// IMPORTANT: /batch must come BEFORE /:productId to avoid conflicts
-router.post("/batch", orderController.createBatchOrders);
-
-// Create single order
-router.post("/:productId", orderController.createOrder);
-
-// Update order status
-router.patch("/:id/status", orderController.updateOrderStatus);
-
-//get order by id
-router.get("/user/:userId", orderController.getOrdersByUserId);
+// ✅ Delivery / courier routes
+router.patch("/:id/assign",       orderController.assignOrderToCourier);   // admin assigns
+router.get("/courier/:courierId", orderController.getOrdersByCourier);     // courier's orders
+router.patch("/:id/deliver",      orderController.markAsDelivered);        // courier delivers
 
 module.exports = router;
