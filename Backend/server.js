@@ -154,6 +154,44 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`🔴 Client disconnected: ${socket.id}`);
   });
+
+  // Courier tapped "Start Delivery" — notify customer immediately
+  socket.on("courier:started_delivery", async ({ courierId, orderId }) => {
+    try {
+    // Look up the order to get user_id and courier name
+    const db = require("./config/db");
+    const [orders] = await db.query("SELECT * FROM orders WHERE id = ?", [orderId]);
+    if (!orders.length) return;
+    const order = orders[0];
+
+    const [couriers] = await db.query(
+      "SELECT fullname FROM users WHERE id = ?", [courierId]
+    );
+    const courierName = couriers[0]?.fullname || "Your courier";
+
+    // Notify customer
+    if (order.user_id) {
+      io.to(`user_${order.user_id}`).emit("order:courier_on_way", {
+        orderId:     Number(orderId),
+        courierName,
+        message:     `${courierName} has started your delivery and is on the way! 🚚`,
+      });
+    }
+
+    // Also notify admin
+    io.to("admin").emit("order:delivery_started", {
+      orderId:     Number(orderId),
+      courierId,
+      courierName,
+    });
+
+    console.log(`🚚 Courier ${courierId} started delivery for order ${orderId}`);
+    } catch (err) {
+      console.error("courier:started_delivery error:", err.message);
+    }
+  });
+
+
 });
 
 

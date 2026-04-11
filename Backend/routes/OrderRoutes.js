@@ -13,5 +13,6 @@ router.patch("/payment/:ref",     orderController.updateOrderByPaymentRef);
 router.patch("/:id/assign",       orderController.assignOrderToCourier);   // admin assigns
 router.get("/courier/:courierId", orderController.getOrdersByCourier);     // courier's orders
 router.patch("/:id/deliver",      orderController.markAsDelivered);        // courier delivers
+router.patch("/:id/location",     orderController.updateCourierLocation);
 
 module.exports = router;
