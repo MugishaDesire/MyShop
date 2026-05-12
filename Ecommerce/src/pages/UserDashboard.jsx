@@ -57,6 +57,34 @@ export default function UserDashboard() {
     return { totalOrders: groupedOrders.length, totalSpent, pendingOrders, totalItems };
   }, [groupedOrders]);
 
+   useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const redirect = params.get("redirect");
+  if (!redirect) return;
+
+  // Clean the URL
+  window.history.replaceState({}, "", "/userdashboard");
+
+  // Wait for user + products to finish loading, then navigate
+  if (!loading) {
+    const currentUser = (() => {
+      try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
+    })();
+
+    if (redirect === "checkout") {
+      const cart = JSON.parse(localStorage.getItem("shoppingCart") || "[]");
+      if (cart.length > 0) navigate("/checkout", { state: { cart, user: currentUser } });
+    } else if (redirect.startsWith("order/")) {
+      const product = (() => {
+        try { return JSON.parse(localStorage.getItem("buyNowProduct")); } catch { return null; }
+      })();
+      if (product) navigate(`/${redirect}`, { state: { product, user: currentUser } });
+    }
+  }
+  }, [loading]); // Re-runs once loading flips to false
+
+
+
   // ── Redirect handling ─────────────────────────────────────────────────────
   useEffect(() => {
     if (loading) return;

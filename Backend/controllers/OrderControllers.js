@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const fetch = require("node-fetch");
 
 // ── Haversine formula — distance in meters between two coords ──
 function getDistanceMeters(lat1, lng1, lat2, lng2) {

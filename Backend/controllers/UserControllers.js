@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 
+
 // ── Email transporter ─────────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -15,12 +16,11 @@ const transporter = nodemailer.createTransport({
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 exports.login = async (req, res) => {
   try {
-    const { email, password, role } = req.body;
+    const { email, password, role, latitude, longitude } = req.body;
 
     if (!email || !password)
       return res.status(400).json({ message: "Email and password are required" });
 
-    // ✅ role must be user or courier
     const allowedRoles = ["user", "courier"];
     if (role && !allowedRoles.includes(role))
       return res.status(400).json({ message: "Invalid role" });
@@ -38,11 +38,20 @@ exports.login = async (req, res) => {
     if (!isMatch)
       return res.status(401).json({ message: "Invalid email or password" });
 
-    // ✅ If role was selected on login, verify it matches the user's role in DB
     if (role && user.role !== role) {
       return res.status(403).json({
         message: `This account is not registered as a ${role}. Please select the correct role.`,
       });
+    }
+
+    // ✅ If courier logs in with GPS coords, update location on users table directly
+    if (user.role === "courier" && latitude != null && longitude != null) {
+      await db.query(
+        `UPDATE users
+         SET latitude = ?, longitude = ?, last_location_update = NOW()
+         WHERE id = ?`,
+        [latitude, longitude, user.id]
+      );
     }
 
     res.status(200).json({
@@ -52,7 +61,7 @@ exports.login = async (req, res) => {
         fullname:    user.fullname,
         phonenumber: user.phonenumber,
         email:       user.email,
-        role:        user.role, // ✅ send role to frontend
+        role:        user.role,
       },
     });
   } catch (error) {
@@ -61,6 +70,55 @@ exports.login = async (req, res) => {
   }
 };
 
+// ✅ NEW — PATCH /users/courier/login-location
+// Called once when the courier dashboard mounts.
+// Updates latitude, longitude, last_location_update on the users table.
+exports.updateLoginLocation = async (req, res) => {
+  try {
+    const { courierId, latitude, longitude } = req.body;
+
+    // Validate all three fields are present
+    if (!courierId || latitude == null || longitude == null) {
+      return res.status(400).json({
+        message: "courierId, latitude and longitude are all required",
+      });
+    }
+
+    // Validate coordinates are real numbers in valid ranges
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+
+    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ message: "Invalid coordinates" });
+    }
+
+    // Update the users table directly — no separate table needed
+    const [result] = await db.query(
+      `UPDATE users
+       SET latitude = ?, longitude = ?, last_location_update = NOW()
+       WHERE id = ? AND role = 'courier'`,
+      [lat, lng, courierId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        message: "Courier not found or account is not a courier",
+      });
+    }
+
+    console.log(`📍 Courier ${courierId} login location updated: ${lat}, ${lng}`);
+
+    res.status(200).json({
+      message: "Login location updated successfully",
+      courierId,
+      latitude:  lat,
+      longitude: lng,
+    });
+  } catch (error) {
+    console.error("updateLoginLocation error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
 // ── REGISTER ──────────────────────────────────────────────────────────────────
 exports.registerUser = async (req, res) => {
   try {

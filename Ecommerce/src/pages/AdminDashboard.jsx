@@ -4,7 +4,7 @@ import axios from "axios";
 import { io } from "socket.io-client";
 
 const CATEGORIES = ["Electronics", "Fashion", "Food", "Art", "Beauty"];
-const BASE = "http://localhost:5000";
+const BASE = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`;
 
 export default function AdminDashboard({ onLogout }) {
   const navigate = useNavigate();
@@ -43,7 +43,7 @@ export default function AdminDashboard({ onLogout }) {
   const socketRef = useRef(null);
 
   useEffect(() => {
-    const socket = io("http://localhost:5000");
+    const socket = io(BASE);
     socketRef.current = socket;
 
     socket.on("connect", () => {

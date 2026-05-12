@@ -12,10 +12,11 @@ const {
   forgotPassword,
   verifyResetToken,
   resetPassword,
-  createCourier,        // ✅ new
-  getAllCouriers,        // ✅ new
-  updateCourierLocation, // ✅ new
-  deleteCourier,        // ✅ new
+  createCourier,
+  getAllCouriers,
+  updateCourierLocation,
+  deleteCourier,
+  updateLoginLocation,   // ✅ NEW — add this import
 } = require("../controllers/UserControllers");
 
 router.post("/login",                    login);
@@ -29,7 +30,8 @@ router.post("/reset-password",           resetPassword);
 // ✅ Courier routes — must be before /:id
 router.post("/courier",                  createCourier);
 router.get("/couriers",                  getAllCouriers);
-router.patch("/courier/:id/location",    updateCourierLocation);
+router.patch("/courier/:id/location",    updateCourierLocation);  // used during active delivery
+router.patch("/courier/login-location",  updateLoginLocation);    // ✅ NEW — used on dashboard mount
 router.delete("/courier/:id",            deleteCourier);
 
 // Google OAuth
@@ -47,7 +49,7 @@ router.get("/auth/google/callback",
       fullname:    user.fullname,
       email:       user.email,
       phonenumber: user.phonenumber,
-      role:        user.role, // ✅ include role
+      role:        user.role,
     }));
     res.redirect(`http://localhost:5173/auth/google/user-success?user=${userData}`);
   }

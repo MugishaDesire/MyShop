@@ -11,16 +11,17 @@ export default function OrderForm() {
     window.location.pathname.includes("/checkout")
   ).current;
 
-  const [product,       setProduct]       = useState(null);
-  const [cartItems,     setCartItems]     = useState([]);
-  const [loading,       setLoading]       = useState(false);
-  const [errors,        setErrors]        = useState({});
-  const [totalPrice,    setTotalPrice]    = useState(0);
-  const [totalItems,    setTotalItems]    = useState(0);
-  const [user,          setUser]          = useState(null);
+  const [product,         setProduct]         = useState(null);
+  const [cartItems,       setCartItems]       = useState([]);
+  const [loading,         setLoading]         = useState(false);
+  const [errors,          setErrors]          = useState({});
+  const [totalPrice,      setTotalPrice]      = useState(0);
+  const [totalItems,      setTotalItems]      = useState(0);
+  const [user,            setUser]            = useState(null);
+  const [locationLoading, setLocationLoading] = useState(false);
 
   // Payment states
-  const [paymentStatus, setPaymentStatus] = useState(null); // null | pending | successful | failed
+  const [paymentStatus,  setPaymentStatus]  = useState(null); // null | pending | successful | failed
   const [transactionRef, setTransactionRef] = useState(null);
 
   const [formData, setFormData] = useState({
@@ -119,6 +120,49 @@ export default function OrderForm() {
   const handleInputChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     if (errors[field]) setErrors((prev) => ({ ...prev, [field]: "" }));
+  };
+
+  // ── GPS location detection ──────────────────────────────────
+  const detectLocation = () => {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser.");
+      return;
+    }
+    setLocationLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude: lat, longitude: lng } = pos.coords;
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
+          );
+          const data = await res.json();
+          const address =
+            data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+          handleInputChange("locationText", address);
+        } catch {
+          handleInputChange(
+            "locationText",
+            `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+          );
+        } finally {
+          setLocationLoading(false);
+        }
+      },
+      (err) => {
+        setLocationLoading(false);
+        if (err.code === 1) {
+          alert(
+            "Location permission denied. Please type your address manually."
+          );
+        } else {
+          alert(
+            "Could not retrieve your location. Please type your address manually."
+          );
+        }
+      },
+      { timeout: 10000 }
+    );
   };
 
   const updateQuantity = (id, newQty) => {
@@ -638,13 +682,47 @@ export default function OrderForm() {
             </div>
           )}
 
+          {/* ── Delivery Address with GPS ── */}
           <div className="form-group">
             <label htmlFor="locationText">
               Delivery Address <span className="required">*</span>
             </label>
+
+            <button
+              type="button"
+              className="geo-btn"
+              onClick={detectLocation}
+              disabled={locationLoading || paymentStatus === "pending"}
+            >
+              {locationLoading ? (
+                <>
+                  <span className="spinner geo-spinner"></span>
+                  Detecting location…
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="geo-icon"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                    <circle cx="12" cy="12" r="8" strokeDasharray="3 3" />
+                  </svg>
+                  Use my current location
+                </>
+              )}
+            </button>
+
             <textarea
               id="locationText"
-              placeholder="Enter your complete delivery address"
+              placeholder="Or type your complete delivery address"
               value={formData.locationText}
               onChange={(e) =>
                 handleInputChange("locationText", e.target.value)
@@ -814,6 +892,13 @@ export default function OrderForm() {
         .order-form input.error, .order-form textarea.error { border-color:#ef4444; }
         .order-form input:disabled, .order-form textarea:disabled { background:#f8fafc; cursor:not-allowed; opacity:.7; }
         .error-message { color:#ef4444; font-size:.85rem; margin-top:4px; display:block; }
+
+        /* GPS location button */
+        .geo-btn { display:flex; align-items:center; gap:8px; margin-bottom:10px; padding:10px 16px; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:8px; font-size:.9rem; font-weight:600; cursor:pointer; transition:all .2s; width:auto; }
+        .geo-btn:hover:not(:disabled) { background:#dbeafe; border-color:#93c5fd; }
+        .geo-btn:disabled { opacity:.6; cursor:not-allowed; }
+        .geo-icon { width:16px; height:16px; flex-shrink:0; }
+        .geo-spinner { display:inline-block; width:14px; height:14px; border:2px solid rgba(29,78,216,.3); border-radius:50%; border-top-color:#1d4ed8; animation:spin 1s ease-in-out infinite; flex-shrink:0; }
 
         /* Payment status boxes */
         .payment-status { border-radius:12px; padding:20px; margin:20px 0; text-align:center; }
