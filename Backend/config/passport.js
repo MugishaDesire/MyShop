@@ -34,8 +34,9 @@ passport.use("google-user",
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: "http://localhost:5000/user/auth/google/callback",
+      passReqToCallback: true,   // ← add this
     },
-    async (accessToken, refreshToken, profile, done) => {
+    async (req, accessToken, refreshToken, profile, done) => {  // ← add req param
       try {
         const email = profile.emails[0].value;
         const fullname = profile.displayName;
@@ -48,7 +49,6 @@ passport.use("google-user",
           return done(null, { ...users[0], role: "user" });
         }
 
-        // Auto-register new user
         await db.query(
           "INSERT INTO users (fullname, email, phonenumber, password) VALUES (?, ?, ?, ?)",
           [fullname, email, "", "GOOGLE_AUTH"]
@@ -63,7 +63,6 @@ passport.use("google-user",
     }
   )
 );
-
 // ── Serialize/Deserialize ─────────────────────────────────────────────────────
 passport.serializeUser((user, done) => {
   // Store both id and role so we know which table to query

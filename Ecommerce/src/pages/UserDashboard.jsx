@@ -57,49 +57,66 @@ export default function UserDashboard() {
     return { totalOrders: groupedOrders.length, totalSpent, pendingOrders, totalItems };
   }, [groupedOrders]);
 
-   useEffect(() => {
+ // ── Single consolidated redirect handler ──────────────────────────────────
+useEffect(() => {
+  if (loading) return;
+
+  // 1. Google OAuth callback — reads appState from URL
   const params = new URLSearchParams(window.location.search);
-  const redirect = params.get("redirect");
-  if (!redirect) return;
+  const appState = params.get("appState");
 
-  // Clean the URL
-  window.history.replaceState({}, "", "/userdashboard");
+  if (appState) {
+    window.history.replaceState({}, "", "/userdashboard");
+    localStorage.removeItem("redirectAfterLogin");
 
-  // Wait for user + products to finish loading, then navigate
-  if (!loading) {
     const currentUser = (() => {
       try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
     })();
 
-    if (redirect === "checkout") {
-      const cart = JSON.parse(localStorage.getItem("shoppingCart") || "[]");
-      if (cart.length > 0) navigate("/checkout", { state: { cart, user: currentUser } });
-    } else if (redirect.startsWith("order/")) {
-      const product = (() => {
-        try { return JSON.parse(localStorage.getItem("buyNowProduct")); } catch { return null; }
+    if (appState === "checkout") {
+      const savedCart = (() => {
+        try { return JSON.parse(localStorage.getItem("shoppingCart") || "[]"); } catch { return []; }
       })();
-      if (product) navigate(`/${redirect}`, { state: { product, user: currentUser } });
+      if (savedCart.length > 0) {
+        navigate("/checkout", { state: { cart: savedCart, user: currentUser }, replace: true });
+        return;
+      }
+    } else if (appState.startsWith("order/")) {
+      const product = (() => {
+        try {
+          const raw = localStorage.getItem("buyNowProduct");
+          return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+      })();
+      if (product) {
+        localStorage.removeItem("buyNowProduct");
+        navigate(`/${appState}`, { state: { product, user: currentUser }, replace: true });
+        return;
+      }
     }
   }
-  }, [loading]); // Re-runs once loading flips to false
 
+  // 2. location.state pendingRedirect (normal email/password login)
+  const state = location.state || {};
+  const { pendingRedirect, pendingCart, pendingProduct, loggedInUser } = state;
+  if (!pendingRedirect) return;
 
+  window.history.replaceState({}, document.title);
+  const currentUser = loggedInUser || (() => {
+    try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
+  })();
 
-  // ── Redirect handling ─────────────────────────────────────────────────────
-  useEffect(() => {
-    if (loading) return;
-    const state = location.state || {};
-    const { pendingRedirect, pendingCart, pendingProduct, loggedInUser } = state;
-    if (!pendingRedirect) return;
-    window.history.replaceState({}, document.title);
-    const currentUser = loggedInUser || (() => { try { return JSON.parse(localStorage.getItem("user")); } catch { return null; } })();
-    if (pendingRedirect === "checkout") {
-      const cartToUse = pendingCart?.length > 0 ? pendingCart : JSON.parse(localStorage.getItem("shoppingCart") || "[]");
-      if (cartToUse.length > 0) navigate("/checkout", { state: { cart: cartToUse, user: currentUser } });
-    } else if (pendingRedirect.startsWith("order/") && pendingProduct) {
-      navigate(`/${pendingRedirect}`, { state: { product: pendingProduct, user: currentUser } });
+  if (pendingRedirect === "checkout") {
+    const cartToUse = pendingCart?.length > 0
+      ? pendingCart
+      : (() => { try { return JSON.parse(localStorage.getItem("shoppingCart") || "[]"); } catch { return []; } })();
+    if (cartToUse.length > 0) {
+      navigate("/checkout", { state: { cart: cartToUse, user: currentUser }, replace: true });
     }
-  }, [loading]);
+  } else if (pendingRedirect.startsWith("order/") && pendingProduct) {
+    navigate(`/${pendingRedirect}`, { state: { product: pendingProduct, user: currentUser }, replace: true });
+  }
+}, [loading]); // fires once when loading flips false
 
   // ── Cart persistence ──────────────────────────────────────────────────────
   useEffect(() => {

@@ -33,11 +33,15 @@ export default function AdminDashboard({ onLogout }) {
   const [courierFormErr,  setCourierFormErr]  = useState("");
   const [courierFormOk,   setCourierFormOk]   = useState("");
   const [creatingCourier, setCreatingCourier] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all");
 
   // ── Assign modal state ─────────────────────────────────────
   const [assignModal,   setAssignModal]   = useState(null);
   const [assignCourier, setAssignCourier] = useState("");
   const [assignLoading, setAssignLoading] = useState(false);
+
+  // ── View Details modal state ───────────────────────────────
+  const [detailsModal, setDetailsModal] = useState(null);
 
   // ── Socket: live order status updates from courier ──────────
   const socketRef = useRef(null);
@@ -50,7 +54,6 @@ export default function AdminDashboard({ onLogout }) {
       socket.emit("admin:join");
     });
 
-    // Fires when courier marks an order as delivered
     socket.on("order:status_changed", ({ orderId, status }) => {
       setOrders(prev =>
         prev.map(o => o.id === orderId ? { ...o, status } : o)
@@ -65,7 +68,6 @@ export default function AdminDashboard({ onLogout }) {
     return () => socket.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
- 
   const handleCashout = async () => {
     const { phone, amount } = cashout;
     if (!phone || !amount)
@@ -292,7 +294,7 @@ export default function AdminDashboard({ onLogout }) {
       .catch(err => { console.error(err); showMessage("Failed to update product", true); });
   };
 
-  // ── Order status update (unchanged) ────────────────────────
+  // ── Order status update ────────────────────────────────────
   const updateOrderStatus = async (orderGroup, customerName) => {
     const itemCount = orderGroup.items.length;
     if (!window.confirm(`Update status for ${customerName}'s order (${itemCount} item${itemCount > 1 ? "s" : ""})?`)) return;
@@ -303,6 +305,10 @@ export default function AdminDashboard({ onLogout }) {
       const newStatus = responses[0].data.status;
       setOrders(orders.map(o => orderGroup.orderIds.includes(o.id) ? { ...o, status: newStatus } : o));
       showMessage(`Order status updated to ${newStatus}!`);
+      // If detailsModal is open for this order, update it too
+      if (detailsModal && detailsModal.id === orderGroup.id) {
+        setDetailsModal(prev => ({ ...prev, status: newStatus }));
+      }
     } catch (err) { console.error(err); showMessage("Failed to update order status", true); }
   };
 
@@ -407,13 +413,166 @@ export default function AdminDashboard({ onLogout }) {
     groupedOrders.filter(o => o.status === "Paid" && !o.courier_id),
   [groupedOrders]);
 
+  const filteredOrders = useMemo(() =>
+    statusFilter === "all"
+      ? groupedOrders
+      : groupedOrders.filter(o => o.status === statusFilter),
+  [groupedOrders, statusFilter]);
+
   const adminUser = (() => {
     try { return JSON.parse(localStorage.getItem("authUser")); }
     catch { return null; }
   })();
 
+  const markDelivered = async (orderGroup) => {
+    if (!window.confirm(`Mark ${orderGroup.cust_name}'s order as Delivered?`)) return;
+    try {
+      await Promise.all(
+        orderGroup.orderIds.map(id =>
+          axios.patch(`${BASE}/orders/${id}/status`, { status: "Delivered" })
+        )
+      );
+      setOrders(prev =>
+        prev.map(o =>
+          orderGroup.orderIds.includes(o.id) ? { ...o, status: "Delivered" } : o
+        )
+      );
+      showMessage(`✅ Order marked as Delivered!`);
+      if (detailsModal && detailsModal.id === orderGroup.id) {
+        setDetailsModal(prev => ({ ...prev, status: "Delivered" }));
+      }
+    } catch (err) {
+      console.error(err);
+      showMessage("Failed to mark as delivered", true);
+    }
+  };
+
+  // ── Format date helper ─────────────────────────────────────
+  const formatDate = (dateStr) => {
+    if (!dateStr) return "—";
+    const d = new Date(dateStr);
+    return d.toLocaleString("en-RW", {
+      day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  };
+
   return (
     <>
+      {/* ══════════════════════════════════════════════════════
+          VIEW DETAILS MODAL
+      ══════════════════════════════════════════════════════ */}
+      {detailsModal && (
+        <div className="modal-overlay" onClick={() => setDetailsModal(null)}>
+          <div className="modal-box details-modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-row">
+                <span className="modal-icon">📋</span>
+                <h3>Order Details</h3>
+              </div>
+              <button className="modal-close" onClick={() => setDetailsModal(null)}>✕</button>
+            </div>
+
+            <div className="modal-body details-modal-body">
+              {/* Customer info */}
+              <div className="details-customer-card">
+                <div className="details-customer-avatar">
+                  {detailsModal.cust_name?.[0]?.toUpperCase() || "?"}
+                </div>
+                <div className="details-customer-info">
+                  <h4>{detailsModal.cust_name}</h4>
+                  <div className="details-customer-meta">
+                    {detailsModal.cust_phone && <span>📱 {detailsModal.cust_phone}</span>}
+                    {detailsModal.cust_email && <span>✉️ {detailsModal.cust_email}</span>}
+                    {detailsModal.location   && <span>📍 {detailsModal.location}</span>}
+                  </div>
+                </div>
+                <div className="details-status-badge">
+                  <span className={`status ${detailsModal.status?.toLowerCase()}`}>
+                    {detailsModal.status}
+                  </span>
+                </div>
+              </div>
+
+              {/* Order meta */}
+              <div className="details-meta-row">
+                <div className="details-meta-item">
+                  <span className="details-meta-label">Order Date</span>
+                  <span className="details-meta-value">{formatDate(detailsModal.created_at)}</span>
+                </div>
+                <div className="details-meta-item">
+                  <span className="details-meta-label">Items</span>
+                  <span className="details-meta-value">{detailsModal.totalItems} item{detailsModal.totalItems !== 1 ? "s" : ""}</span>
+                </div>
+                {detailsModal.courier_id && (
+                  <div className="details-meta-item">
+                    <span className="details-meta-label">Courier</span>
+                    <span className="details-meta-value courier-highlight">
+                      🚚 {getCourierName(detailsModal.courier_id) || `Courier #${detailsModal.courier_id}`}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Products ordered */}
+              <div className="details-section-label">Products Ordered</div>
+              <div className="details-items-list">
+                <div className="details-items-header">
+                  <span>Product</span>
+                  <span>Qty</span>
+                  <span>Unit Price</span>
+                  <span>Subtotal</span>
+                </div>
+                {detailsModal.items.map((item, i) => (
+                  <div key={item.id || i} className="details-item-row">
+                    <div className="details-item-name">
+                      <div className="details-item-dot" />
+                      <span>{item.productName}</span>
+                    </div>
+                    <span className="details-item-qty">×{item.qty}</span>
+                    <span className="details-item-price">${parseFloat(item.price || 0).toFixed(2)}</span>
+                    <span className="details-item-subtotal">${parseFloat(item.subtotal || 0).toFixed(2)}</span>
+                  </div>
+                ))}
+                <div className="details-items-total">
+                  <span>Total</span>
+                  <span className="details-total-amount">${detailsModal.totalAmount.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer actions */}
+            <div className="modal-footer details-modal-footer">
+              {detailsModal.status !== "Delivered" && detailsModal.status !== "Pending" && (
+                <button
+                  className={`assign-courier-btn ${!detailsModal.courier_id && detailsModal.status === "Paid" ? "assign-courier-btn-urgent" : ""}`}
+                  onClick={() => { setDetailsModal(null); openAssignModal(detailsModal); }}
+                >
+                  🚚 {detailsModal.courier_id ? "Reassign Courier" : "Assign Courier"}
+                </button>
+              )}
+              {detailsModal.status !== "Delivered" && (
+                <button
+                  className="mark-delivered-btn"
+                  onClick={() => { markDelivered(detailsModal); setDetailsModal(null); }}
+                >
+                  ✅ Mark Delivered
+                </button>
+              )}
+              {detailsModal.status !== "Delivered" && (
+                <button
+                  className="update-status-button"
+                  onClick={() => updateOrderStatus(detailsModal, detailsModal.cust_name)}
+                >
+                  🔄 Update Status
+                </button>
+              )}
+              <button className="modal-cancel-btn" onClick={() => setDetailsModal(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ══════════════════════════════════════════════════════
           ASSIGN COURIER MODAL
       ══════════════════════════════════════════════════════ */}
@@ -610,7 +769,25 @@ export default function AdminDashboard({ onLogout }) {
           <div className="list-section">
             <h2 className="section-header"><span className="header-icon">📋</span>Recent Orders</h2>
 
-            {unassignedOrders.length > 0 && (
+            {/* ── Status filter bar ── */}
+            <div className="order-filter-bar">
+              {["all", "Pending", "Paid", "Assigned", "Delivered"].map(s => (
+                <button
+                  key={s}
+                  className={`ofb-btn ${statusFilter === s ? "active" : ""} ofb-${s.toLowerCase()}`}
+                  onClick={() => setStatusFilter(s)}
+                >
+                  {s === "all" ? "All" : s}
+                  <span className="ofb-count">
+                    {s === "all"
+                      ? groupedOrders.length
+                      : groupedOrders.filter(o => o.status === s).length}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {unassignedOrders.length > 0 && statusFilter !== "Delivered" && (
               <div className="unassigned-banner">
                 <span>⚠️</span>
                 <span><strong>{unassignedOrders.length}</strong> paid order{unassignedOrders.length > 1 ? "s" : ""} need a courier assigned</span>
@@ -619,11 +796,15 @@ export default function AdminDashboard({ onLogout }) {
 
             {loading.orders ? (
               <div className="loading-state"><div className="spinner"></div><p>Loading orders...</p></div>
-            ) : groupedOrders.length === 0 ? (
-              <div className="empty-state"><span className="empty-icon">📋</span><h3>No Orders Yet</h3><p>Orders will appear here when customers make purchases</p></div>
+            ) : filteredOrders.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon">📋</span>
+                <h3>No {statusFilter === "all" ? "" : statusFilter} Orders</h3>
+                <p>{statusFilter === "all" ? "Orders will appear here when customers make purchases" : `No orders with status "${statusFilter}" found`}</p>
+              </div>
             ) : (
               <div className="orders-list">
-                {groupedOrders.map(orderGroup => (
+                {filteredOrders.map(orderGroup => (
                   <div
                     key={orderGroup.id}
                     className={`order-card ${
@@ -633,58 +814,76 @@ export default function AdminDashboard({ onLogout }) {
                       ""
                     }`}
                   >
+                    {/* ── Order header: customer name + status ── */}
                     <div className="order-header">
                       <div className="customer-info">
-                        <h3>{orderGroup.cust_name || "Unknown Customer"}</h3>
-                        <div className="customer-details">
-                          <span>📱 {orderGroup.cust_phone || "N/A"}</span>
-                          {orderGroup.cust_email && <span>✉️ {orderGroup.cust_email}</span>}
-                          <span>📍 {orderGroup.location || "N/A"}</span>
-                          {orderGroup.courier_id && (
-                            <span className="assigned-courier-badge">
-                              🚚 {getCourierName(orderGroup.courier_id) || `Courier #${orderGroup.courier_id}`}
-                            </span>
-                          )}
+                        <div className="customer-name-row">
+                          <div className="order-avatar">{orderGroup.cust_name?.[0]?.toUpperCase() || "?"}</div>
+                          <div>
+                            <h3>{orderGroup.cust_name}</h3>
+                            <div className="customer-details">
+                              {orderGroup.cust_phone && <span>📱 {orderGroup.cust_phone}</span>}
+                              {orderGroup.location   && <span>📍 {orderGroup.location}</span>}
+                              <span>🕐 {formatDate(orderGroup.created_at)}</span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                       <div className="order-status-badge">
-                        <span className={`status ${(orderGroup.status || "pending").toLowerCase()}`}>
-                          {orderGroup.status || "Pending"}
-                        </span>
+                        <span className={`status ${orderGroup.status?.toLowerCase()}`}>{orderGroup.status}</span>
                       </div>
                     </div>
 
-                    <div className="order-items-list">
-                      <div className="items-header"><span>{orderGroup.items.length} Item{orderGroup.items.length > 1 ? "s" : ""}</span></div>
-                      {orderGroup.items.map(item => (
-                        <div key={item.id} className="order-item">
-                          <div className="item-info"><span className="item-name">{item.productName}</span><span className="item-quantity">x{item.qty}</span></div>
-                          <div className="item-total"><span className="item-price">${item.price.toFixed(2)}</span><span className="item-subtotal">${item.subtotal.toFixed(2)}</span></div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* ── Assigned: pulsing delivery indicator ── */}
-                    {orderGroup.status === "Assigned" && (
+                    {/* ── Assigned courier bar ── */}
+                    {orderGroup.status === "Assigned" && orderGroup.courier_id && (
                       <div className="order-status-bar order-status-bar-assigned">
                         <span className="osb-pulse-dot" />
-                        <span>Courier assigned — delivery in progress</span>
-                        {orderGroup.courier_id && getCourierName(orderGroup.courier_id) && (
-                          <span className="osb-courier-name">🚚 {getCourierName(orderGroup.courier_id)}</span>
-                        )}
+                        <span>Out for delivery</span>
+                        <span className="osb-courier-name">🚚 {getCourierName(orderGroup.courier_id) || `Courier #${orderGroup.courier_id}`}</span>
                       </div>
                     )}
-
-                    {/* ── Delivered: green confirmation ── */}
                     {orderGroup.status === "Delivered" && (
                       <div className="order-status-bar order-status-bar-delivered">
                         ✅ Delivered successfully
                       </div>
                     )}
 
+                    {/* ── Products ordered (inline preview) ── */}
+                    <div className="order-items-preview">
+                      <div className="order-items-preview-label">
+                        🛍️ {orderGroup.totalItems} item{orderGroup.totalItems !== 1 ? "s" : ""} ordered
+                      </div>
+                      <div className="order-items-chips">
+                        {orderGroup.items.slice(0, 3).map((item, i) => (
+                          <div key={item.id || i} className="order-item-chip">
+                            <span className="chip-name">{item.productName}</span>
+                            <span className="chip-qty">×{item.qty}</span>
+                            <span className="chip-price">${parseFloat(item.subtotal || 0).toFixed(2)}</span>
+                          </div>
+                        ))}
+                        {orderGroup.items.length > 3 && (
+                          <div className="order-item-chip chip-more">
+                            +{orderGroup.items.length - 3} more
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* ── Footer: total + actions ── */}
                     <div className="order-footer">
-                      <div className="order-total"><span>Total Amount:</span><strong>${orderGroup.totalAmount.toFixed(2)}</strong></div>
+                      <div className="order-total">
+                        <span>Total:</span>
+                        <strong>${orderGroup.totalAmount.toFixed(2)}</strong>
+                      </div>
                       <div className="order-actions-row">
+                        {/* View Details replaces Update Status as primary action */}
+                        <button
+                          className="view-details-btn"
+                          onClick={() => setDetailsModal(orderGroup)}
+                        >
+                          👁 View Details
+                        </button>
+
                         {orderGroup.status !== "Delivered" && orderGroup.status !== "Pending" && (
                           <button
                             className={`assign-courier-btn ${!orderGroup.courier_id && orderGroup.status === "Paid" ? "assign-courier-btn-urgent" : ""}`}
@@ -693,9 +892,15 @@ export default function AdminDashboard({ onLogout }) {
                             🚚 {orderGroup.courier_id ? "Reassign" : "Assign Courier"}
                           </button>
                         )}
-                        <button className="update-status-button" onClick={() => updateOrderStatus(orderGroup, orderGroup.cust_name)}>
-                          Update Status
-                        </button>
+
+                        {orderGroup.status !== "Delivered" && (
+                          <button
+                            className="mark-delivered-btn"
+                            onClick={() => markDelivered(orderGroup)}
+                          >
+                            ✅ Mark Delivered
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -776,17 +981,25 @@ export default function AdminDashboard({ onLogout }) {
                     <div key={og.id} className="order-card order-card-needs-courier">
                       <div className="order-header">
                         <div className="customer-info">
-                          <h3>{og.cust_name}</h3>
-                          <div className="customer-details">
-                            <span>📱 {og.cust_phone}</span>
-                            <span>📍 {og.location}</span>
+                          <div className="customer-name-row">
+                            <div className="order-avatar">{og.cust_name?.[0]?.toUpperCase() || "?"}</div>
+                            <div>
+                              <h3>{og.cust_name}</h3>
+                              <div className="customer-details">
+                                <span>📱 {og.cust_phone}</span>
+                                <span>📍 {og.location}</span>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <span className="status paid">{og.status}</span>
+                        <span className={`status ${og.status?.toLowerCase()}`}>{og.status}</span>
                       </div>
                       <div className="order-footer" style={{ marginTop: 0 }}>
                         <div className="order-total"><span>Total:</span><strong>${og.totalAmount.toFixed(2)}</strong></div>
-                        <button className="assign-courier-btn assign-courier-btn-urgent" onClick={() => openAssignModal(og)}>🚚 Assign Courier</button>
+                        <div className="order-actions-row">
+                          <button className="view-details-btn" onClick={() => setDetailsModal(og)}>👁 View Details</button>
+                          <button className="assign-courier-btn assign-courier-btn-urgent" onClick={() => openAssignModal(og)}>🚚 Assign Courier</button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -873,6 +1086,78 @@ export default function AdminDashboard({ onLogout }) {
         .header-left { display:flex; align-items:center; gap:24px; }
         .dashboard-title { display:flex; align-items:center; gap:12px; font-size:28px; font-weight:700; color:white; margin:0; }
         .title-icon { font-size:32px; }
+
+        .order-filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
+        .ofb-btn { display:flex; align-items:center; gap:6px; padding:8px 16px; border-radius:20px; border:1px solid #e2e8f0; background:#f8fafc; color:#64748b; font-size:13px; font-weight:600; cursor:pointer; transition:all .2s; }
+        .ofb-btn:hover, .ofb-btn.active { border-color:#3b82f6; background:#eff6ff; color:#1d4ed8; }
+        .ofb-btn.ofb-pending.active, .ofb-btn.ofb-pending:hover   { background:#fffbeb; color:#92400e; border-color:#fde68a; }
+        .ofb-btn.ofb-paid.active, .ofb-btn.ofb-paid:hover         { background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; }
+        .ofb-btn.ofb-assigned.active, .ofb-btn.ofb-assigned:hover { background:#faf5ff; color:#6d28d9; border-color:#c4b5fd; }
+        .ofb-btn.ofb-delivered.active, .ofb-btn.ofb-delivered:hover { background:#f0fdf4; color:#166534; border-color:#86efac; }
+        .ofb-count { background:rgba(0,0,0,.08); padding:1px 7px; border-radius:10px; font-size:11px; }
+
+        /* ── Order card: customer name row ── */
+        .customer-name-row { display:flex; align-items:center; gap:12px; }
+        .order-avatar { width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg,#3b82f6,#2563eb); display:flex; align-items:center; justify-content:center; color:white; font-size:16px; font-weight:700; flex-shrink:0; }
+
+        /* ── Products preview chips ── */
+        .order-items-preview { background:white; border-radius:12px; padding:12px 14px; margin-bottom:16px; border:1px solid #e2e8f0; }
+        .order-items-preview-label { font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px; }
+        .order-items-chips { display:flex; flex-wrap:wrap; gap:8px; }
+        .order-item-chip { display:flex; align-items:center; gap:6px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:5px 12px; font-size:13px; }
+        .chip-name { font-weight:600; color:#1e293b; }
+        .chip-qty { color:#64748b; font-size:12px; }
+        .chip-price { color:#059669; font-weight:700; font-size:12px; }
+        .chip-more { color:#3b82f6; font-weight:700; background:#eff6ff; border-color:#bfdbfe; }
+
+        /* ── View Details button ── */
+        .view-details-btn { background:linear-gradient(135deg,#0ea5e9,#0284c7); color:white; border:none; padding:10px 18px; border-radius:10px; font-weight:600; font-size:13px; cursor:pointer; transition:all .2s; display:flex; align-items:center; gap:6px; }
+        .view-details-btn:hover { transform:translateY(-1px); box-shadow:0 5px 15px rgba(14,165,233,.35); }
+
+        .mark-delivered-btn { background:linear-gradient(135deg,#16a34a,#15803d); color:white; border:none; padding:10px 18px; border-radius:10px; font-weight:600; font-size:13px; cursor:pointer; transition:all .2s; }
+        .mark-delivered-btn:hover { transform:translateY(-1px); box-shadow:0 5px 15px rgba(22,163,74,.3); }
+
+        /* ── Details modal ── */
+        .details-modal-box { max-width:560px !important; }
+        .details-modal-body { padding:20px 24px; max-height:65vh; overflow-y:auto; }
+        .details-modal-body::-webkit-scrollbar { width:4px; }
+        .details-modal-body::-webkit-scrollbar-track { background:#f1f5f9; border-radius:4px; }
+        .details-modal-body::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+
+        .details-customer-card { display:flex; align-items:center; gap:14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px; padding:14px 16px; margin-bottom:16px; }
+        .details-customer-avatar { width:48px; height:48px; border-radius:14px; background:linear-gradient(135deg,#3b82f6,#2563eb); display:flex; align-items:center; justify-content:center; color:white; font-size:20px; font-weight:700; flex-shrink:0; }
+        .details-customer-info { flex:1; min-width:0; }
+        .details-customer-info h4 { font-size:16px; font-weight:700; color:#1e293b; margin-bottom:6px; }
+        .details-customer-meta { display:flex; flex-direction:column; gap:3px; font-size:12px; color:#64748b; }
+        .details-status-badge { flex-shrink:0; }
+
+        .details-meta-row { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+        .details-meta-item { flex:1; min-width:120px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; display:flex; flex-direction:column; gap:4px; }
+        .details-meta-label { font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; }
+        .details-meta-value { font-size:13px; font-weight:600; color:#1e293b; }
+        .courier-highlight { color:#7c3aed; }
+
+        .details-section-label { font-size:12px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px; }
+        .details-items-list { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; margin-bottom:4px; }
+        .details-items-header { display:grid; grid-template-columns:1fr 48px 80px 80px; gap:8px; padding:10px 14px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.5px; }
+        .details-items-header span:not(:first-child) { text-align:right; }
+        .details-item-row { display:grid; grid-template-columns:1fr 48px 80px 80px; gap:8px; padding:11px 14px; border-bottom:1px solid #e2e8f0; align-items:center; transition:background .15s; }
+        .details-item-row:last-of-type { border-bottom:none; }
+        .details-item-row:hover { background:#f0f9ff; }
+        .details-item-name { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color:#1e293b; }
+        .details-item-dot { width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0; }
+        .details-item-qty  { font-size:13px; color:#64748b; text-align:right; }
+        .details-item-price { font-size:13px; color:#64748b; text-align:right; }
+        .details-item-subtotal { font-size:14px; font-weight:700; color:#059669; text-align:right; }
+        .details-items-total { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:white; border-top:2px solid #e2e8f0; font-size:14px; font-weight:700; color:#1e293b; }
+        .details-total-amount { font-size:18px; font-weight:800; color:#1e293b; }
+
+        .details-modal-footer { display:flex; gap:8px; padding:14px 24px; border-top:1px solid #e2e8f0; background:#f8fafc; flex-wrap:wrap; }
+        .details-modal-footer .assign-courier-btn,
+        .details-modal-footer .mark-delivered-btn,
+        .details-modal-footer .update-status-button { flex:1; min-width:120px; justify-content:center; }
+        .details-modal-footer .modal-cancel-btn { flex:0 0 auto; min-width:80px; }
+
         .welcome-badge { display:flex; align-items:center; gap:8px; background:rgba(255,255,255,.1); padding:8px 16px; border-radius:30px; }
         .welcome-text { color:#94a3b8; font-size:14px; }
         .admin-name { color:white; font-weight:600; font-size:14px; }
@@ -956,7 +1241,6 @@ export default function AdminDashboard({ onLogout }) {
         .cancel-button:hover { background:#e2e8f0; transform:translateY(-1px); }
         .orders-list { display:flex; flex-direction:column; gap:16px; }
 
-        /* ── Order card base + status variants ── */
         .order-card { background:#f8fafc; border-radius:16px; padding:20px; border:1px solid #e2e8f0; transition:all .3s ease; }
         .order-card-needs-courier { border-color:#fbbf24 !important; background:#fffbeb !important; }
         .order-card-assigned      { border-color:#a78bfa !important; background:linear-gradient(160deg,#faf5ff 0%,#f5f3ff 100%) !important; }
@@ -967,22 +1251,12 @@ export default function AdminDashboard({ onLogout }) {
         .customer-details { display:flex; flex-wrap:wrap; gap:16px; font-size:13px; color:#64748b; }
         .assigned-courier-badge { background:#ede9fe; color:#6d28d9; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; border:1px solid #c4b5fd; }
         .order-status-badge .status { display:inline-block; padding:6px 14px; border-radius:30px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
+        .status { display:inline-block; padding:6px 14px; border-radius:30px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
         .status.delivered { background:#dcfce7; color:#166534; }
         .status.paid      { background:#fef3c7; color:#92400e; }
         .status.pending   { background:#fee2e2; color:#991b1b; }
         .status.assigned  { background:#ede9fe; color:#5b21b6; }
-        .order-items-list { background:white; border-radius:12px; padding:12px; margin-bottom:16px; }
-        .items-header { padding:8px 0; border-bottom:1px solid #e2e8f0; margin-bottom:8px; font-size:12px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:.5px; }
-        .order-item { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #e2e8f0; }
-        .order-item:last-child { border-bottom:none; }
-        .item-info { display:flex; align-items:center; gap:12px; }
-        .item-name { font-weight:600; color:#1e293b; font-size:14px; }
-        .item-quantity { color:#64748b; font-size:12px; }
-        .item-total { display:flex; align-items:center; gap:16px; }
-        .item-price    { color:#64748b; font-size:12px; }
-        .item-subtotal { font-weight:700; color:#059669; font-size:14px; }
 
-        /* ── Status bars (Assigned / Delivered) ── */
         .order-status-bar { display:flex; align-items:center; gap:10px; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px; font-weight:600; flex-wrap:wrap; }
         .order-status-bar-assigned  { background:#ede9fe; border:1px solid #c4b5fd; color:#5b21b6; }
         .order-status-bar-delivered { background:#dcfce7; border:1px solid #86efac; color:#166534; justify-content:center; }
@@ -1122,11 +1396,14 @@ export default function AdminDashboard({ onLogout }) {
           .revenue-breakdown { grid-template-columns:1fr; }
           .order-footer { flex-direction:column; gap:12px; align-items:stretch; }
           .order-actions-row { flex-direction:column; }
-          .assign-courier-btn,.update-status-button { width:100%; text-align:center; justify-content:center; }
+          .assign-courier-btn,.view-details-btn,.mark-delivered-btn { width:100%; text-align:center; justify-content:center; }
           .product-grid { grid-template-columns:1fr; }
           .edit-grid { grid-template-columns:1fr; }
           .couriers-grid { grid-template-columns:1fr; }
           .courier-card { flex-wrap:wrap; }
+          .details-items-header, .details-item-row { grid-template-columns:1fr 40px 64px 64px; }
+          .details-modal-footer { flex-direction:column; }
+          .details-modal-footer button { width:100%; }
         }
       `}</style>
     </>

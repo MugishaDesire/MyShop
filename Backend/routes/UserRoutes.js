@@ -35,15 +35,20 @@ router.patch("/courier/login-location",  updateLoginLocation);    // ✅ NEW —
 router.delete("/courier/:id",            deleteCourier);
 
 // Google OAuth
-router.get("/auth/google",
-  passport.authenticate("google-user", { scope: ["profile", "email"] })
-);
+router.get("/auth/google", (req, res, next) => {
+  const appState = req.query.appState || "";
+  passport.authenticate("google-user", {
+    scope: ["profile", "email"],
+    state: appState,
+  })(req, res, next);
+});
 router.get("/auth/google/callback",
   passport.authenticate("google-user", {
     failureRedirect: "http://localhost:5173/ulogin?error=google_failed",
   }),
   (req, res) => {
     const user = req.user;
+    const appState = req.query.state || "";
     const userData = encodeURIComponent(JSON.stringify({
       id:          user.id,
       fullname:    user.fullname,
@@ -51,7 +56,7 @@ router.get("/auth/google/callback",
       phonenumber: user.phonenumber,
       role:        user.role,
     }));
-    res.redirect(`http://localhost:5173/auth/google/user-success?user=${userData}`);
+    res.redirect(`http://localhost:5173/auth/google/user-success?user=${userData}&appState=${encodeURIComponent(appState)}`);
   }
 );
 

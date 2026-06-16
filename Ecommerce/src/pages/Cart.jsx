@@ -53,13 +53,14 @@ export default function Cart() {
   };
 
   const handleCheckout = () => {
-    if (!user) {
-      localStorage.setItem("redirectAfterLogin", "checkout");
-      navigate("/ulogin", { state: { from: "checkout" } });
-    } else {
-      navigate("/checkout", { state: { cart, user } });
-    }
-  };
+  if (!user) {
+    localStorage.setItem("redirectAfterLogin", "checkout");
+    localStorage.setItem("shoppingCart", JSON.stringify(cart)); // ensure latest cart is saved
+    navigate("/ulogin", { state: { from: "checkout" } });
+  } else {
+    navigate("/checkout", { state: { cart, user } });
+  }
+};
 
   const totalItems = cart.reduce((s, i) => s + i.quantity, 0);
   const subtotal = cart.reduce((s, i) => s + (parseFloat(i.price) || 0) * i.quantity, 0);
