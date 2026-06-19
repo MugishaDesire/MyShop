@@ -45,7 +45,7 @@ router.get("/auth/google", (req, res, next) => {
 router.get("/auth/google/callback",
   passport.authenticate("google-user", {
     failureRedirect: "http://localhost:5173/ulogin?error=google_failed",
-  }),
+  }), 
   (req, res) => {
     const user = req.user;
     const appState = req.query.state || "";
